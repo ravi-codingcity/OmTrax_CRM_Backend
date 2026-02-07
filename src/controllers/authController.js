@@ -200,6 +200,75 @@ exports.updatePassword = async (req, res) => {
     }
 };
 
+// @desc    Reset password (public - requires username and old password)
+// @route   POST /api/auth/reset-password
+// @access  Public
+exports.resetPassword = async (req, res) => {
+    try {
+        const { username, oldPassword, newPassword } = req.body;
+
+        // Validate required fields
+        if (!username || !oldPassword || !newPassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please provide username, old password, and new password'
+            });
+        }
+
+        // Validate new password length
+        if (newPassword.length < 6) {
+            return res.status(400).json({
+                success: false,
+                message: 'New password must be at least 6 characters'
+            });
+        }
+
+        // Find user by username
+        const user = await User.findOne({ username: username.toLowerCase() }).select('+password');
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        // Check if user is active
+        if (!user.isActive) {
+            return res.status(401).json({
+                success: false,
+                message: 'Account is deactivated. Please contact admin.'
+            });
+        }
+
+        // Verify old password
+        const isMatch = await user.comparePassword(oldPassword);
+
+        if (!isMatch) {
+            return res.status(401).json({
+                success: false,
+                message: 'Old password is incorrect'
+            });
+        }
+
+        // Update password
+        user.password = newPassword;
+        await user.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Password reset successfully'
+        });
+    } catch (error) {
+        console.error('Reset password error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error during password reset',
+            error: error.message
+        });
+    }
+};
+
 // @desc    Get all users (Admin only)
 // @route   GET /api/auth/users
 // @access  Private/Admin

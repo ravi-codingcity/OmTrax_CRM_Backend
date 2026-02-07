@@ -11,8 +11,8 @@ const signupValidation = [
         .isLength({ min: 3 })
         .withMessage('Username must be at least 3 characters'),
     body('password')
-        .isLength({ min: 6 })
-        .withMessage('Password must be at least 6 characters'),
+        .isLength({ min: 5 })
+        .withMessage('Password must be at least 5 characters'),
     body('name')
         .trim()
         .notEmpty()
@@ -33,9 +33,23 @@ const loginValidation = [
         .withMessage('Password is required')
 ];
 
+const resetPasswordValidation = [
+    body('username')
+        .trim()
+        .notEmpty()
+        .withMessage('Username is required'),
+    body('oldPassword')
+        .notEmpty()
+        .withMessage('Old password is required'),
+    body('newPassword')
+        .isLength({ min: 5 })
+        .withMessage('New password must be at least 5 characters')
+];
+
 // Public routes
 router.post('/signup', signupValidation, authController.signup);
 router.post('/login', loginValidation, authController.login);
+router.post('/reset-password', resetPasswordValidation, authController.resetPassword);
 
 // Protected routes
 router.get('/me', protect, authController.getMe);
