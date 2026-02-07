@@ -205,6 +205,15 @@ exports.updatePassword = async (req, res) => {
 // @access  Public
 exports.resetPassword = async (req, res) => {
     try {
+        // Check for validation errors
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                errors: errors.array()
+            });
+        }
+
         const { username, oldPassword, newPassword } = req.body;
 
         // Validate required fields
@@ -216,10 +225,10 @@ exports.resetPassword = async (req, res) => {
         }
 
         // Validate new password length
-        if (newPassword.length < 6) {
+        if (newPassword.length < 5) {
             return res.status(400).json({
                 success: false,
-                message: 'New password must be at least 6 characters'
+                message: 'New password must be at least 5 characters'
             });
         }
 
