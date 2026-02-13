@@ -10,6 +10,7 @@ router.use(protect);
 router.get('/', notificationController.getNotifications);
 router.get('/unread-count', notificationController.getUnreadCount);
 router.get('/reminders', notificationController.getReminders);
+router.put('/reminders/dismiss-all', notificationController.dismissAllReminders);
 router.put('/reminders/:id/dismiss', notificationController.dismissReminder);
 router.put('/read-all', notificationController.markAllAsRead);
 router.put('/:id/read', notificationController.markAsRead);

@@ -1,5 +1,6 @@
 const Notification = require('../models/Notification');
 const SalesEntry = require('../models/SalesEntry');
+const DismissedReminder = require('../models/DismissedReminder');
 
 // @desc    Get notifications for current user
 // @route   GET /api/notifications
@@ -124,6 +125,17 @@ exports.getReminders = async (req, res) => {
             nextFollowUpDate: { $gte: today, $lt: tomorrow }
         };
 
+        // Get dismissed reminders for this user
+        const dismissedReminders = await DismissedReminder.find({ user: req.user.id })
+            .select('salesEntry dismissedForDate');
+        
+        // Create a map for quick lookup
+        const dismissedMap = new Map();
+        dismissedReminders.forEach(d => {
+            const key = `${d.salesEntry.toString()}_${d.dismissedForDate.toISOString()}`;
+            dismissedMap.set(key, true);
+        });
+
         const [overdueEntries, todayEntries] = await Promise.all([
             SalesEntry.find(overdueFilter)
                 .populate('salesPerson', 'name username')
@@ -135,9 +147,18 @@ exports.getReminders = async (req, res) => {
                 .select('companyName contactPerson contactNumber nextFollowUpDate queryStatus remark salesPerson branch')
         ]);
 
+        // Filter out dismissed reminders
+        const filterDismissed = (entry) => {
+            const key = `${entry._id.toString()}_${entry.nextFollowUpDate.toISOString()}`;
+            return !dismissedMap.has(key);
+        };
+
+        const filteredOverdue = overdueEntries.filter(filterDismissed);
+        const filteredToday = todayEntries.filter(filterDismissed);
+
         // Format as reminders
         const reminders = [
-            ...overdueEntries.map(entry => ({
+            ...filteredOverdue.map(entry => ({
                 _id: entry._id,
                 type: 'reminder',
                 salesEntry: entry._id,
@@ -154,7 +175,7 @@ exports.getReminders = async (req, res) => {
                 isOverdue: true,
                 isRead: false
             })),
-            ...todayEntries.map(entry => ({
+            ...filteredToday.map(entry => ({
                 _id: entry._id,
                 type: 'reminder',
                 salesEntry: entry._id,
@@ -178,8 +199,8 @@ exports.getReminders = async (req, res) => {
             data: reminders,
             summary: {
                 total: reminders.length,
-                overdue: overdueEntries.length,
-                today: todayEntries.length
+                overdue: filteredOverdue.length,
+                today: filteredToday.length
             }
         });
     } catch (error) {
@@ -192,15 +213,11 @@ exports.getReminders = async (req, res) => {
     }
 };
 
-// @desc    Dismiss a reminder (mark as handled)
+// @desc    Dismiss a reminder (mark as handled) - persists so it won't reappear after logout
 // @route   PUT /api/notifications/reminders/:id/dismiss
 // @access  Private
 exports.dismissReminder = async (req, res) => {
     try {
-        // The id here is a SalesEntry ID, not a Notification ID
-        // We just return success - the user clicked it, meaning they saw it
-        // The reminder will reappear if follow-up date passes without action
-        
         const salesEntry = await SalesEntry.findById(req.params.id);
         
         if (!salesEntry) {
@@ -210,6 +227,29 @@ exports.dismissReminder = async (req, res) => {
             });
         }
 
+        if (!salesEntry.nextFollowUpDate) {
+            return res.status(400).json({
+                success: false,
+                message: 'No follow-up date to dismiss'
+            });
+        }
+
+        // Save the dismissal - will persist across logout/login
+        await DismissedReminder.findOneAndUpdate(
+            {
+                user: req.user.id,
+                salesEntry: salesEntry._id,
+                dismissedForDate: salesEntry.nextFollowUpDate
+            },
+            {
+                user: req.user.id,
+                salesEntry: salesEntry._id,
+                dismissedForDate: salesEntry.nextFollowUpDate,
+                dismissedAt: new Date()
+            },
+            { upsert: true, new: true }
+        );
+
         res.status(200).json({
             success: true,
             message: 'Reminder dismissed',
@@ -217,6 +257,71 @@ exports.dismissReminder = async (req, res) => {
         });
     } catch (error) {
         console.error('Dismiss reminder error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Dismiss all reminders (for mark all as read)
+// @route   PUT /api/notifications/reminders/dismiss-all
+// @access  Private
+exports.dismissAllReminders = async (req, res) => {
+    try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+
+        // Build filter based on user role
+        const baseFilter = {
+            isActive: true,
+            nextFollowUpDate: { $exists: true, $ne: null }
+        };
+
+        if (req.user.role === 'salesperson') {
+            baseFilter.salesPerson = req.user.id;
+        }
+
+        // Get all reminders (overdue + today)
+        const filter = {
+            ...baseFilter,
+            nextFollowUpDate: { $lte: tomorrow }
+        };
+
+        const entries = await SalesEntry.find(filter).select('_id nextFollowUpDate');
+
+        // Create dismissal records for all
+        const dismissals = entries.map(entry => ({
+            updateOne: {
+                filter: {
+                    user: req.user.id,
+                    salesEntry: entry._id,
+                    dismissedForDate: entry.nextFollowUpDate
+                },
+                update: {
+                    user: req.user.id,
+                    salesEntry: entry._id,
+                    dismissedForDate: entry.nextFollowUpDate,
+                    dismissedAt: new Date()
+                },
+                upsert: true
+            }
+        }));
+
+        if (dismissals.length > 0) {
+            await DismissedReminder.bulkWrite(dismissals);
+        }
+
+        res.status(200).json({
+            success: true,
+            message: `${dismissals.length} reminders dismissed`
+        });
+    } catch (error) {
+        console.error('Dismiss all reminders error:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
@@ -269,7 +374,7 @@ exports.markAsRead = async (req, res) => {
     }
 };
 
-// @desc    Mark all notifications as read
+// @desc    Mark all notifications as read (also dismisses all reminders)
 // @route   PUT /api/notifications/read-all
 // @access  Private
 exports.markAllAsRead = async (req, res) => {
@@ -283,14 +388,53 @@ exports.markAllAsRead = async (req, res) => {
             isRead: false
         };
 
+        // Mark all notifications as read
         const result = await Notification.updateMany(filter, {
             isRead: true,
             readAt: new Date()
         });
 
+        // Also dismiss all reminders
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+
+        const reminderFilter = {
+            isActive: true,
+            nextFollowUpDate: { $exists: true, $ne: null, $lte: tomorrow }
+        };
+
+        if (req.user.role === 'salesperson') {
+            reminderFilter.salesPerson = req.user.id;
+        }
+
+        const entries = await SalesEntry.find(reminderFilter).select('_id nextFollowUpDate');
+
+        const dismissals = entries.map(entry => ({
+            updateOne: {
+                filter: {
+                    user: req.user.id,
+                    salesEntry: entry._id,
+                    dismissedForDate: entry.nextFollowUpDate
+                },
+                update: {
+                    user: req.user.id,
+                    salesEntry: entry._id,
+                    dismissedForDate: entry.nextFollowUpDate,
+                    dismissedAt: new Date()
+                },
+                upsert: true
+            }
+        }));
+
+        if (dismissals.length > 0) {
+            await DismissedReminder.bulkWrite(dismissals);
+        }
+
         res.status(200).json({
             success: true,
-            message: `${result.modifiedCount} notifications marked as read`
+            message: `${result.modifiedCount} notifications marked as read, ${dismissals.length} reminders dismissed`
         });
     } catch (error) {
         console.error('Mark all as read error:', error);
