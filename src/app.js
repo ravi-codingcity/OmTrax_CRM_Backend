@@ -9,6 +9,7 @@ const followUpRoutes = require('./routes/followUpRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const branchRoutes = require('./routes/branchRoutes');
+const salesVisitRoutes = require('./routes/salesVisitRoutes');
 
 // Initialize express app
 const app = express();
@@ -58,6 +59,7 @@ app.use('/api/follow-ups', followUpRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/branches', branchRoutes);
+app.use('/api/sales-visits', salesVisitRoutes);
 
 // ============================================
 // ERROR HANDLING

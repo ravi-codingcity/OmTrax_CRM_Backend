@@ -1,0 +1,232 @@
+const SalesVisit = require('../models/SalesVisit');
+const { deleteImage } = require('../config/cloudinary');
+
+// @desc    Get all sales visits (admin gets all, salesperson gets own)
+// @route   GET /api/sales-visits
+// @access  Private
+exports.getSalesVisits = async (req, res) => {
+    try {
+        const { page = 1, limit = 50, date, startDate, endDate } = req.query;
+
+        // Build filter - admin sees all, others see only their own
+        const filter = {};
+        if (req.user.role !== 'admin') {
+            filter.salesPerson = req.user.id;
+        }
+
+        // Date filtering
+        if (date) {
+            filter.date = date;
+        } else if (startDate || endDate) {
+            filter.date = {};
+            if (startDate) filter.date.$gte = startDate;
+            if (endDate) filter.date.$lte = endDate;
+        }
+
+        const pageNum = parseInt(page, 10);
+        const limitNum = parseInt(limit, 10);
+        const skip = (pageNum - 1) * limitNum;
+
+        const [visits, total] = await Promise.all([
+            SalesVisit.find(filter)
+                .populate('salesPerson', 'name username email')
+                .sort({ date: -1, time: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean(), // Use lean() for faster queries on mobile
+            SalesVisit.countDocuments(filter)
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: visits,
+            pagination: {
+                currentPage: pageNum,
+                totalPages: Math.ceil(total / limitNum),
+                totalRecords: total,
+                hasNextPage: pageNum * limitNum < total
+            }
+        });
+    } catch (error) {
+        console.error('Get sales visits error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Get single sales visit
+// @route   GET /api/sales-visits/:id
+// @access  Private
+exports.getSalesVisit = async (req, res) => {
+    try {
+        const visit = await SalesVisit.findById(req.params.id)
+            .populate('salesPerson', 'name username email phoneNumber');
+
+        if (!visit) {
+            return res.status(404).json({
+                success: false,
+                message: 'Sales visit not found'
+            });
+        }
+
+        // Check access - admin can see all, others only their own
+        if (req.user.role !== 'admin' && visit.salesPerson._id.toString() !== req.user.id) {
+            return res.status(403).json({
+                success: false,
+                message: 'Access denied'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: visit
+        });
+    } catch (error) {
+        console.error('Get sales visit error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Create new sales visit
+// @route   POST /api/sales-visits
+// @access  Private
+exports.createSalesVisit = async (req, res) => {
+    try {
+        const { companyName, location, latitude, longitude, date, time, notes } = req.body;
+
+        // Build visit data
+        const visitData = {
+            companyName,
+            location,
+            latitude: parseFloat(latitude),
+            longitude: parseFloat(longitude),
+            date,
+            time,
+            notes,
+            salesPerson: req.user.id,
+            salesPersonName: req.user.name,
+            timestamp: new Date()
+        };
+
+        // Handle uploaded image
+        if (req.file) {
+            visitData.imageUrl = req.file.path;
+            visitData.imagePublicId = req.file.filename;
+        }
+
+        const visit = await SalesVisit.create(visitData);
+
+        // Populate for response
+        const populatedVisit = await SalesVisit.findById(visit._id)
+            .populate('salesPerson', 'name username email');
+
+        res.status(201).json({
+            success: true,
+            message: 'Sales visit recorded successfully',
+            data: populatedVisit
+        });
+    } catch (error) {
+        console.error('Create sales visit error:', error);
+        
+        // If there was an uploaded image and creation failed, delete it
+        if (req.file && req.file.filename) {
+            await deleteImage(req.file.filename);
+        }
+
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Delete sales visit
+// @route   DELETE /api/sales-visits/:id
+// @access  Private (admin or owner)
+exports.deleteSalesVisit = async (req, res) => {
+    try {
+        const visit = await SalesVisit.findById(req.params.id);
+
+        if (!visit) {
+            return res.status(404).json({
+                success: false,
+                message: 'Sales visit not found'
+            });
+        }
+
+        // Check access - only admin or owner can delete
+        if (req.user.role !== 'admin' && visit.salesPerson.toString() !== req.user.id) {
+            return res.status(403).json({
+                success: false,
+                message: 'Access denied. Only admin or owner can delete.'
+            });
+        }
+
+        // Delete image from Cloudinary if exists
+        if (visit.imagePublicId) {
+            await deleteImage(visit.imagePublicId);
+        }
+
+        await visit.deleteOne();
+
+        res.status(200).json({
+            success: true,
+            message: 'Sales visit deleted successfully'
+        });
+    } catch (error) {
+        console.error('Delete sales visit error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Get sales visits summary (for dashboard)
+// @route   GET /api/sales-visits/summary
+// @access  Private
+exports.getVisitsSummary = async (req, res) => {
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        
+        const filter = {};
+        if (req.user.role !== 'admin') {
+            filter.salesPerson = req.user.id;
+        }
+
+        const [totalVisits, todayVisits, recentVisits] = await Promise.all([
+            SalesVisit.countDocuments(filter),
+            SalesVisit.countDocuments({ ...filter, date: today }),
+            SalesVisit.find(filter)
+                .sort({ createdAt: -1 })
+                .limit(5)
+                .select('companyName location date time imageUrl')
+                .lean()
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                totalVisits,
+                todayVisits,
+                recentVisits
+            }
+        });
+    } catch (error) {
+        console.error('Get visits summary error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
