@@ -1,5 +1,5 @@
 const SalesVisit = require('../models/SalesVisit');
-const { deleteImage } = require('../config/cloudinary');
+const { deleteImage, cloudinary } = require('../config/cloudinary');
 
 // @desc    Get all sales visits (admin gets all, salesperson gets own)
 // @route   GET /api/sales-visits
@@ -99,7 +99,11 @@ exports.getSalesVisit = async (req, res) => {
 // @access  Private
 exports.createSalesVisit = async (req, res) => {
     try {
-        const { companyName, location, latitude, longitude, date, time, notes } = req.body;
+        console.log('=== Sales Visit Creation ===');
+        console.log('Body keys:', Object.keys(req.body));
+        console.log('File:', req.file ? 'Present' : 'Not present');
+        
+        const { companyName, location, latitude, longitude, date, time, notes, imageBase64 } = req.body;
 
         // Build visit data
         const visitData = {
@@ -115,13 +119,44 @@ exports.createSalesVisit = async (req, res) => {
             timestamp: new Date()
         };
 
-        // Handle uploaded image
+        // Handle image - try multiple methods
+        
+        // Method 1: File uploaded via multer (FormData with file)
         if (req.file) {
-            visitData.imageUrl = req.file.path;
-            visitData.imagePublicId = req.file.filename;
+            console.log('Image received via multer');
+            visitData.imageUrl = req.file.path || req.file.secure_url || req.file.url;
+            visitData.imagePublicId = req.file.filename || req.file.public_id;
+        }
+        // Method 2: Base64 image from Capacitor camera
+        else if (imageBase64) {
+            console.log('Image received as base64, uploading to Cloudinary...');
+            try {
+                // Handle both with and without data URL prefix
+                let base64Data = imageBase64;
+                if (!imageBase64.startsWith('data:')) {
+                    base64Data = `data:image/jpeg;base64,${imageBase64}`;
+                }
+                
+                const uploadResult = await cloudinary.uploader.upload(base64Data, {
+                    folder: 'omtrax-crm/sales-visits',
+                    transformation: [
+                        { width: 1024, height: 1024, crop: 'limit', quality: 'auto:good' }
+                    ]
+                });
+                
+                console.log('Cloudinary upload success:', uploadResult.secure_url);
+                visitData.imageUrl = uploadResult.secure_url;
+                visitData.imagePublicId = uploadResult.public_id;
+            } catch (uploadError) {
+                console.error('Cloudinary base64 upload error:', uploadError);
+                // Continue without image rather than failing the entire request
+            }
+        } else {
+            console.log('No image provided');
         }
 
         const visit = await SalesVisit.create(visitData);
+        console.log('Visit created:', visit._id, 'Image:', visitData.imageUrl || 'none');
 
         // Populate for response
         const populatedVisit = await SalesVisit.findById(visit._id)

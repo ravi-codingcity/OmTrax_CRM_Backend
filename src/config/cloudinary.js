@@ -9,23 +9,38 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
+console.log('Cloudinary configured with cloud_name:', process.env.CLOUDINARY_CLOUD_NAME);
+
 // Configure Cloudinary storage for multer
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
-    params: {
-        folder: 'omtrax-crm/sales-visits',
-        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-        transformation: [
-            { width: 1024, height: 1024, crop: 'limit', quality: 'auto:good' }
-        ]
+    params: async (req, file) => {
+        console.log('Processing file for Cloudinary:', file.originalname, file.mimetype);
+        return {
+            folder: 'omtrax-crm/sales-visits',
+            allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+            transformation: [
+                { width: 1024, height: 1024, crop: 'limit', quality: 'auto:good' }
+            ],
+            resource_type: 'image'
+        };
     }
 });
 
-// Multer upload middleware
+// Multer upload middleware with better error handling
 const upload = multer({
     storage: storage,
     limits: {
-        fileSize: 5 * 1024 * 1024 // 5MB limit for mobile optimization
+        fileSize: 10 * 1024 * 1024 // 10MB limit for mobile captures
+    },
+    fileFilter: (req, file, cb) => {
+        console.log('Multer fileFilter - File received:', file.originalname, file.mimetype);
+        // Accept images only
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only image files are allowed!'), false);
+        }
     }
 });
 
