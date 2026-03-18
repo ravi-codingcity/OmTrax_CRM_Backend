@@ -100,10 +100,16 @@ exports.getSalesVisit = async (req, res) => {
 exports.createSalesVisit = async (req, res) => {
     try {
         console.log('=== Sales Visit Creation ===');
+        console.log('Content-Type:', req.headers['content-type']);
         console.log('Body keys:', Object.keys(req.body));
-        console.log('File:', req.file ? 'Present' : 'Not present');
+        console.log('Has imageBase64:', !!req.body.imageBase64);
+        console.log('Has image:', !!req.body.image);
+        console.log('File from multer:', req.file ? 'Present' : 'Not present');
         
-        const { companyName, location, latitude, longitude, date, time, notes, imageBase64 } = req.body;
+        const { companyName, location, latitude, longitude, date, time, notes } = req.body;
+        
+        // Check for image in multiple possible fields
+        const imageBase64 = req.body.imageBase64 || req.body.image || req.body.photo || req.body.capturedImage;
 
         // Build visit data
         const visitData = {
@@ -129,7 +135,8 @@ exports.createSalesVisit = async (req, res) => {
         }
         // Method 2: Base64 image from Capacitor camera
         else if (imageBase64) {
-            console.log('Image received as base64, uploading to Cloudinary...');
+            console.log('Image received as base64, length:', imageBase64.length);
+            console.log('Base64 starts with:', imageBase64.substring(0, 50));
             try {
                 // Handle both with and without data URL prefix
                 let base64Data = imageBase64;
@@ -137,6 +144,7 @@ exports.createSalesVisit = async (req, res) => {
                     base64Data = `data:image/jpeg;base64,${imageBase64}`;
                 }
                 
+                console.log('Uploading to Cloudinary...');
                 const uploadResult = await cloudinary.uploader.upload(base64Data, {
                     folder: 'omtrax-crm/sales-visits',
                     transformation: [
@@ -144,19 +152,24 @@ exports.createSalesVisit = async (req, res) => {
                     ]
                 });
                 
-                console.log('Cloudinary upload success:', uploadResult.secure_url);
+                console.log('Cloudinary upload SUCCESS:', uploadResult.secure_url);
                 visitData.imageUrl = uploadResult.secure_url;
                 visitData.imagePublicId = uploadResult.public_id;
             } catch (uploadError) {
-                console.error('Cloudinary base64 upload error:', uploadError);
-                // Continue without image rather than failing the entire request
+                console.error('Cloudinary base64 upload FAILED:', uploadError.message);
+                // Return error so frontend knows image upload failed
+                return res.status(400).json({
+                    success: false,
+                    message: 'Image upload to Cloudinary failed',
+                    error: uploadError.message
+                });
             }
         } else {
-            console.log('No image provided');
+            console.log('WARNING: No image provided in request');
         }
 
         const visit = await SalesVisit.create(visitData);
-        console.log('Visit created:', visit._id, 'Image:', visitData.imageUrl || 'none');
+        console.log('Visit created:', visit._id, 'Image:', visitData.imageUrl || 'NONE');
 
         // Populate for response
         const populatedVisit = await SalesVisit.findById(visit._id)
