@@ -137,6 +137,17 @@ exports.createSalesVisit = async (req, res) => {
         else if (imageBase64) {
             console.log('Image received as base64, length:', imageBase64.length);
             console.log('Base64 starts with:', imageBase64.substring(0, 50));
+            
+            // Verify Cloudinary is configured
+            if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+                console.error('Cloudinary credentials not configured!');
+                return res.status(500).json({
+                    success: false,
+                    message: 'Server configuration error: Cloudinary not configured',
+                    error: 'Missing Cloudinary credentials'
+                });
+            }
+            
             try {
                 // Handle both with and without data URL prefix
                 let base64Data = imageBase64;
@@ -145,23 +156,25 @@ exports.createSalesVisit = async (req, res) => {
                 }
                 
                 console.log('Uploading to Cloudinary...');
+                console.log('Cloud name:', process.env.CLOUDINARY_CLOUD_NAME);
+                
                 const uploadResult = await cloudinary.uploader.upload(base64Data, {
-                    folder: 'omtrax-crm/sales-visits',
-                    transformation: [
-                        { width: 1024, height: 1024, crop: 'limit', quality: 'auto:good' }
-                    ]
+                    folder: 'sales-visits',
+                    resource_type: 'auto'
                 });
                 
                 console.log('Cloudinary upload SUCCESS:', uploadResult.secure_url);
                 visitData.imageUrl = uploadResult.secure_url;
                 visitData.imagePublicId = uploadResult.public_id;
             } catch (uploadError) {
-                console.error('Cloudinary base64 upload FAILED:', uploadError.message);
+                console.error('Cloudinary base64 upload FAILED:', uploadError);
+                console.error('Error details:', JSON.stringify(uploadError, null, 2));
                 // Return error so frontend knows image upload failed
                 return res.status(400).json({
                     success: false,
                     message: 'Image upload to Cloudinary failed',
-                    error: uploadError.message
+                    error: uploadError.message || 'Unknown Cloudinary error',
+                    details: uploadError.http_code || uploadError.error
                 });
             }
         } else {

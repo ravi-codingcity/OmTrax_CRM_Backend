@@ -9,7 +9,19 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-console.log('Cloudinary configured with cloud_name:', process.env.CLOUDINARY_CLOUD_NAME);
+// Verify configuration
+const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+const apiKey = process.env.CLOUDINARY_API_KEY;
+const apiSecret = process.env.CLOUDINARY_API_SECRET;
+
+console.log('=== Cloudinary Configuration ===');
+console.log('Cloud name:', cloudName || 'NOT SET');
+console.log('API Key:', apiKey ? `${apiKey.substring(0, 4)}...` : 'NOT SET');
+console.log('API Secret:', apiSecret ? 'SET (hidden)' : 'NOT SET');
+
+if (!cloudName || !apiKey || !apiSecret) {
+    console.error('WARNING: Cloudinary credentials are not fully configured!');
+}
 
 // Configure Cloudinary storage for multer
 const storage = new CloudinaryStorage({
