@@ -34,7 +34,7 @@ exports.addFollowUp = async (req, res) => {
         salesEntry.followUpHistory.push(followUp._id);
         salesEntry.totalFollowUps += 1;
         salesEntry.lastFollowUpDate = new Date();
-        salesEntry.remark = remark;
+        // Do NOT overwrite salesEntry.remark — it holds the original creation remark (Initial Entry)
         salesEntry.queryStatus = status || salesEntry.queryStatus;
         
         if (nextFollowUpDate) {
