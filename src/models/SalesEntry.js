@@ -70,6 +70,33 @@ const salesEntrySchema = new mongoose.Schema({
     convertedDate: {
         type: Date
     },
+    // Audit trail of previous owners when a lead is reassigned (e.g. salesperson resignation)
+    previousSalesPersons: [{
+        salesPerson: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        salesPersonName: {
+            type: String,
+            trim: true
+        },
+        branch: {
+            type: String,
+            trim: true
+        },
+        reassignedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        reassignedByName: {
+            type: String,
+            trim: true
+        },
+        reassignedAt: {
+            type: Date,
+            default: Date.now
+        }
+    }],
     isActive: {
         type: Boolean,
         default: true
