@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const notificationSchema = new mongoose.Schema({
     type: {
         type: String,
-        enum: ['followup', 'reminder', 'new_entry'],
+        enum: ['followup', 'reminder', 'new_entry', 'business_new', 'business_update'],
         required: [true, 'Notification type is required'],
         index: true
     },
@@ -87,6 +87,14 @@ notificationSchema.pre('save', function(next) {
             case 'new_entry':
                 this.title = 'New Sales Entry';
                 this.message = `New entry added: ${this.companyName}`;
+                break;
+            case 'business_new':
+                this.title = 'New Business Entry';
+                this.message = `New business added for ${this.companyName}`;
+                break;
+            case 'business_update':
+                this.title = 'Business Updated';
+                this.message = `Business updated for ${this.companyName}`;
                 break;
         }
     }
