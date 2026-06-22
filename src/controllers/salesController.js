@@ -3,6 +3,7 @@ const FollowUp = require('../models/FollowUp');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const DismissedReminder = require('../models/DismissedReminder');
+const { resolveDepartment, departmentQuery, canViewAllInDepartment } = require('../utils/department');
 
 // @desc    Create new sales entry
 // @route   POST /api/sales
@@ -12,9 +13,12 @@ exports.createSalesEntry = async (req, res) => {
         // Set the sales person to current user if not provided
         const salesPersonId = req.body.salesPerson || req.user.id;
 
+        const department = resolveDepartment(req);
+
         const salesEntryData = {
             ...req.body,
             salesPerson: salesPersonId,
+            department,
             entryDate: req.body.entryDate || new Date()
         };
 
@@ -34,6 +38,7 @@ exports.createSalesEntry = async (req, res) => {
                 salesPersonName: req.user.name,
                 remark: salesEntry.remark,
                 nextFollowUpDate: salesEntry.nextFollowUpDate,
+                department,
                 forRole: 'admin'
             });
         } catch (notifError) {
@@ -73,11 +78,11 @@ exports.getSalesEntries = async (req, res) => {
             sortOrder = 'desc'
         } = req.query;
 
-        // Build filter object
-        const filter = { isActive: true };
+        // Build filter object — scoped to the active department
+        const filter = { isActive: true, ...departmentQuery(resolveDepartment(req)) };
 
-        // Role-based filtering
-        if (req.user.role === 'salesperson') {
+        // Role-based filtering: restricted roles only see their own entries
+        if (!canViewAllInDepartment(req.user.role)) {
             filter.salesPerson = req.user.id;
         } else if (salesPerson) {
             filter.salesPerson = salesPerson;
@@ -168,8 +173,8 @@ exports.getSalesEntry = async (req, res) => {
             });
         }
 
-        // Check access for salesperson role
-        if (req.user.role === 'salesperson' && 
+        // Check access for restricted roles (only own entries)
+        if (!canViewAllInDepartment(req.user.role) &&
             salesEntry.salesPerson._id.toString() !== req.user.id) {
             return res.status(403).json({
                 success: false,
@@ -205,8 +210,8 @@ exports.updateSalesEntry = async (req, res) => {
             });
         }
 
-        // Check access for salesperson role
-        if (req.user.role === 'salesperson' && 
+        // Check access for restricted roles (only own entries)
+        if (!canViewAllInDepartment(req.user.role) &&
             salesEntry.salesPerson.toString() !== req.user.id) {
             return res.status(403).json({
                 success: false,
@@ -290,11 +295,12 @@ exports.getTodayFollowUps = async (req, res) => {
                 $lt: tomorrow
             },
             isActive: true,
-            queryStatus: { $nin: ['converted', 'closed', 'not_interested'] }
+            queryStatus: { $nin: ['converted', 'closed', 'not_interested'] },
+            ...departmentQuery(resolveDepartment(req))
         };
 
         // Role-based filtering
-        if (req.user.role === 'salesperson') {
+        if (!canViewAllInDepartment(req.user.role)) {
             filter.salesPerson = req.user.id;
         }
 
@@ -367,9 +373,10 @@ exports.reassignLeads = async (req, res) => {
             });
         }
 
-        // Find ALL leads currently owned by the source salesperson
-        // (includes soft-deleted leads so ownership transfer is complete)
-        const entries = await SalesEntry.find({ salesPerson: fromSalesPerson }).select('_id');
+        // Find ALL leads currently owned by the source salesperson within the
+        // active department (includes soft-deleted leads so transfer is complete)
+        const deptFilter = departmentQuery(resolveDepartment(req));
+        const entries = await SalesEntry.find({ salesPerson: fromSalesPerson, ...deptFilter }).select('_id');
         const entryIds = entries.map((e) => e._id);
 
         if (entryIds.length === 0) {
@@ -396,7 +403,7 @@ exports.reassignLeads = async (req, res) => {
 
         // 1. Transfer lead ownership + align branch to the new owner, keeping audit trail
         await SalesEntry.updateMany(
-            { salesPerson: fromSalesPerson },
+            { salesPerson: fromSalesPerson, ...deptFilter },
             {
                 $set: { salesPerson: toSalesPerson, branch: toUser.branch },
                 $push: { previousSalesPersons: historyRecord }
@@ -456,11 +463,12 @@ exports.getOverdueFollowUps = async (req, res) => {
         const filter = {
             nextFollowUpDate: { $lt: today },
             isActive: true,
-            queryStatus: { $nin: ['converted', 'closed', 'not_interested'] }
+            queryStatus: { $nin: ['converted', 'closed', 'not_interested'] },
+            ...departmentQuery(resolveDepartment(req))
         };
 
         // Role-based filtering
-        if (req.user.role === 'salesperson') {
+        if (!canViewAllInDepartment(req.user.role)) {
             filter.salesPerson = req.user.id;
         }
 

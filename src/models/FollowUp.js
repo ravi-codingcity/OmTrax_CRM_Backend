@@ -28,6 +28,12 @@ const followUpSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    department: {
+        type: String,
+        enum: ['relocation', 'hr'],
+        default: 'relocation',
+        index: true
+    },
     followUpDate: {
         type: Date,
         default: Date.now

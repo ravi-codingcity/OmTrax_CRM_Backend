@@ -1,6 +1,7 @@
 const Business = require('../models/Business');
 const Notification = require('../models/Notification');
 const { validationResult } = require('express-validator');
+const { resolveDepartment, departmentQuery, canViewAllInDepartment } = require('../utils/department');
 
 // Helper: create a notification visible to both the salesperson (forUser)
 // and admins (forRole). One document satisfies the getNotifications $or filter
@@ -13,6 +14,7 @@ const createBusinessNotification = async ({ type, business, actor }) => {
             salesPerson: business.salesPerson,
             salesPersonName: business.salesPersonName,
             remark: `Job #${business.jobNumber} • ₹${Number(business.estimateAmount || 0).toLocaleString('en-IN')}`,
+            department: business.department || 'relocation',
             forUser: business.salesPerson,
             forRole: 'admin'
         });
@@ -50,6 +52,7 @@ exports.createBusiness = async (req, res) => {
             salesPerson: salesPersonId,
             salesPersonName: req.body.salesPersonName || req.user.name,
             branch: req.body.branch || req.user.branch,
+            department: resolveDepartment(req),
             entryDate: req.body.entryDate || new Date()
         };
 
@@ -101,10 +104,10 @@ exports.getBusinessEntries = async (req, res) => {
             sortOrder = 'desc'
         } = req.query;
 
-        const filter = { isActive: true };
+        const filter = { isActive: true, ...departmentQuery(resolveDepartment(req)) };
 
-        // Role-based filtering - salesperson sees only their own
-        if (req.user.role === 'salesperson') {
+        // Role-based filtering - restricted roles see only their own
+        if (!canViewAllInDepartment(req.user.role)) {
             filter.salesPerson = req.user.id;
         } else if (salesPerson) {
             filter.salesPerson = salesPerson;
@@ -171,8 +174,8 @@ exports.getBusiness = async (req, res) => {
             });
         }
 
-        // Access check for salesperson role
-        if (req.user.role === 'salesperson' &&
+        // Access check for restricted roles (only own entries)
+        if (!canViewAllInDepartment(req.user.role) &&
             business.salesPerson._id.toString() !== req.user.id) {
             return res.status(403).json({
                 success: false,
@@ -208,8 +211,8 @@ exports.updateBusiness = async (req, res) => {
             });
         }
 
-        // Salesperson may only edit their own entries
-        if (req.user.role === 'salesperson' &&
+        // Restricted roles may only edit their own entries
+        if (!canViewAllInDepartment(req.user.role) &&
             business.salesPerson.toString() !== req.user.id) {
             return res.status(403).json({
                 success: false,

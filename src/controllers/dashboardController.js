@@ -2,6 +2,7 @@ const SalesEntry = require('../models/SalesEntry');
 const FollowUp = require('../models/FollowUp');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
+const { resolveDepartment, departmentQuery, canViewAllInDepartment } = require('../utils/department');
 
 // @desc    Get dashboard statistics
 // @route   GET /api/dashboard/stats
@@ -17,9 +18,10 @@ exports.getDashboardStats = async (req, res) => {
         const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
         const startOfYear = new Date(today.getFullYear(), 0, 1);
 
-        // Build base filter based on user role
-        const baseFilter = { isActive: true };
-        if (req.user.role === 'salesperson') {
+        // Build base filter based on user role, scoped to active department
+        const department = resolveDepartment(req);
+        const baseFilter = { isActive: true, ...departmentQuery(department) };
+        if (!canViewAllInDepartment(req.user.role)) {
             baseFilter.salesPerson = req.user.id;
         }
 
@@ -222,9 +224,10 @@ exports.getAnalytics = async (req, res) => {
             dateFrom.setDate(dateFrom.getDate() - parseInt(period));
         }
 
-        // Base match for aggregation
-        const baseMatch = { isActive: true };
-        if (req.user.role === 'salesperson') {
+        // Base match for aggregation, scoped to active department
+        const department = resolveDepartment(req);
+        const baseMatch = { isActive: true, ...departmentQuery(department) };
+        if (!canViewAllInDepartment(req.user.role)) {
             baseMatch.salesPerson = req.user._id;
         }
 
@@ -260,11 +263,12 @@ exports.getAnalytics = async (req, res) => {
 
         // Top performing salespersons (admin only)
         let topPerformers = [];
-        if (req.user.role === 'admin' || req.user.role === 'manager') {
+        if (canViewAllInDepartment(req.user.role)) {
             topPerformers = await SalesEntry.aggregate([
                 {
                     $match: {
                         isActive: true,
+                        ...departmentQuery(department),
                         entryDate: { $gte: dateFrom, $lte: dateTo }
                     }
                 },
@@ -493,9 +497,10 @@ exports.getSalespersonPerformance = async (req, res) => {
 exports.getRecentActivities = async (req, res) => {
     try {
         const { limit = 20 } = req.query;
+        const department = resolveDepartment(req);
 
-        const filter = {};
-        if (req.user.role === 'salesperson') {
+        const filter = { ...departmentQuery(department) };
+        if (!canViewAllInDepartment(req.user.role)) {
             filter.addedBy = req.user.id;
         }
 
@@ -506,8 +511,8 @@ exports.getRecentActivities = async (req, res) => {
             .limit(parseInt(limit));
 
         // Get recent sales entries
-        const entryFilter = { isActive: true };
-        if (req.user.role === 'salesperson') {
+        const entryFilter = { isActive: true, ...departmentQuery(department) };
+        if (!canViewAllInDepartment(req.user.role)) {
             entryFilter.salesPerson = req.user.id;
         }
 

@@ -45,8 +45,14 @@ const notificationSchema = new mongoose.Schema({
     },
     forRole: {
         type: String,
-        enum: ['admin', 'salesperson', 'manager', 'all'],
+        enum: ['admin', 'salesperson', 'manager', 'recruiter', 'senior_recruiter', 'hr_executive', 'hr_manager', 'hr_head', 'all'],
         default: 'all'
+    },
+    department: {
+        type: String,
+        enum: ['relocation', 'hr'],
+        default: 'relocation',
+        index: true
     },
     isRead: {
         type: Boolean,

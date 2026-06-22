@@ -1,6 +1,7 @@
 const FollowUp = require('../models/FollowUp');
 const SalesEntry = require('../models/SalesEntry');
 const Notification = require('../models/Notification');
+const { canViewAllInDepartment } = require('../utils/department');
 
 // @desc    Add follow-up to a sales entry
 // @route   POST /api/follow-ups
@@ -19,7 +20,7 @@ exports.addFollowUp = async (req, res) => {
             });
         }
 
-        // Create follow-up
+        // Create follow-up (inherits the lead's department)
         const followUp = await FollowUp.create({
             salesEntry: salesEntryId,
             remark,
@@ -27,6 +28,7 @@ exports.addFollowUp = async (req, res) => {
             status: status || 'Cold',
             addedBy: addedBy || req.user.id,
             addedByName: addedByName || req.user.name,
+            department: salesEntry.department || 'relocation',
             followUpDate: new Date()
         });
 
@@ -54,6 +56,7 @@ exports.addFollowUp = async (req, res) => {
                 remark,
                 nextFollowUpDate,
                 followUpDate: new Date(),
+                department: salesEntry.department || 'relocation',
                 forRole: 'admin'
             });
         } catch (notifError) {
@@ -96,8 +99,8 @@ exports.getFollowUpsBySalesEntry = async (req, res) => {
             });
         }
 
-        // Check access for salesperson role
-        if (req.user.role === 'salesperson' && 
+        // Check access for restricted roles (only own entries)
+        if (!canViewAllInDepartment(req.user.role) &&
             salesEntry.salesPerson.toString() !== req.user.id) {
             return res.status(403).json({
                 success: false,

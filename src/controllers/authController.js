@@ -2,6 +2,13 @@ const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 const { validationResult } = require('express-validator');
 const { jwtSecret, jwtExpire } = require('../config/constants');
+const {
+    DEFAULT_DEPARTMENT,
+    isValidDepartment,
+    ROLES_BY_DEPARTMENT,
+    resolveDepartment,
+    departmentQuery,
+} = require('../utils/department');
 
 // Generate JWT Token
 const generateToken = (userId) => {
@@ -24,6 +31,21 @@ exports.signup = async (req, res) => {
 
         const { username, password, name, email, role, branch, phoneNumber } = req.body;
 
+        // Resolve & validate department
+        const department = isValidDepartment(req.body.department)
+            ? req.body.department
+            : DEFAULT_DEPARTMENT;
+
+        // Validate that the chosen role is allowed for the chosen department
+        const allowedRoles = ROLES_BY_DEPARTMENT[department] || [];
+        const finalRole = role || (department === DEFAULT_DEPARTMENT ? 'salesperson' : 'recruiter');
+        if (!allowedRoles.includes(finalRole)) {
+            return res.status(400).json({
+                success: false,
+                message: `Role '${finalRole}' is not valid for the ${department} department`
+            });
+        }
+
         // Check if user already exists
         const existingUser = await User.findOne({
             $or: [{ username }, { email }]
@@ -32,8 +54,8 @@ exports.signup = async (req, res) => {
         if (existingUser) {
             return res.status(400).json({
                 success: false,
-                message: existingUser.username === username 
-                    ? 'Username already exists' 
+                message: existingUser.username === username
+                    ? 'Username already exists'
                     : 'Email already exists'
             });
         }
@@ -44,7 +66,8 @@ exports.signup = async (req, res) => {
             password,
             name,
             email,
-            role: role || 'salesperson',
+            role: finalRole,
+            department,
             branch,
             phoneNumber
         });
@@ -284,9 +307,9 @@ exports.resetPassword = async (req, res) => {
 exports.getAllUsers = async (req, res) => {
     try {
         const { role, branch, isActive } = req.query;
-        
-        // Build filter object
-        const filter = {};
+
+        // Build filter object — scoped to the active department
+        const filter = { ...departmentQuery(resolveDepartment(req)) };
         if (role) filter.role = role;
         if (branch) filter.branch = branch;
         if (isActive !== undefined) filter.isActive = isActive === 'true';

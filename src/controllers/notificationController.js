@@ -1,6 +1,7 @@
 const Notification = require('../models/Notification');
 const SalesEntry = require('../models/SalesEntry');
 const DismissedReminder = require('../models/DismissedReminder');
+const { resolveDepartment, departmentQuery, canViewAllInDepartment } = require('../utils/department');
 
 // @desc    Get notifications for current user
 // @route   GET /api/notifications
@@ -9,8 +10,10 @@ exports.getNotifications = async (req, res) => {
     try {
         const { page = 1, limit = 20, isRead, type } = req.query;
 
-        // Build filter - get notifications for user or for their role or for all
+        // Build filter - get notifications for user or for their role or for all,
+        // scoped to the active department
         const filter = {
+            ...departmentQuery(resolveDepartment(req)),
             $or: [
                 { forUser: req.user.id },
                 { forRole: req.user.role },
@@ -67,6 +70,7 @@ exports.getNotifications = async (req, res) => {
 exports.getUnreadCount = async (req, res) => {
     try {
         const filter = {
+            ...departmentQuery(resolveDepartment(req)),
             $or: [
                 { forUser: req.user.id },
                 { forRole: req.user.role },
@@ -102,14 +106,15 @@ exports.getReminders = async (req, res) => {
         const tomorrow = new Date(today);
         tomorrow.setDate(tomorrow.getDate() + 1);
 
-        // Base filter - exclude closed entries
+        // Base filter - exclude closed entries, scoped to active department
         const baseFilter = {
             isActive: true,
-            nextFollowUpDate: { $exists: true, $ne: null }
+            nextFollowUpDate: { $exists: true, $ne: null },
+            ...departmentQuery(resolveDepartment(req))
         };
 
-        // Role-based filtering - salesperson sees only their own
-        if (req.user.role === 'salesperson') {
+        // Role-based filtering - restricted roles see only their own
+        if (!canViewAllInDepartment(req.user.role)) {
             baseFilter.salesPerson = req.user.id;
         }
 
@@ -276,13 +281,14 @@ exports.dismissAllReminders = async (req, res) => {
         const tomorrow = new Date(today);
         tomorrow.setDate(tomorrow.getDate() + 1);
 
-        // Build filter based on user role
+        // Build filter based on user role, scoped to active department
         const baseFilter = {
             isActive: true,
-            nextFollowUpDate: { $exists: true, $ne: null }
+            nextFollowUpDate: { $exists: true, $ne: null },
+            ...departmentQuery(resolveDepartment(req))
         };
 
-        if (req.user.role === 'salesperson') {
+        if (!canViewAllInDepartment(req.user.role)) {
             baseFilter.salesPerson = req.user.id;
         }
 
@@ -380,6 +386,7 @@ exports.markAsRead = async (req, res) => {
 exports.markAllAsRead = async (req, res) => {
     try {
         const filter = {
+            ...departmentQuery(resolveDepartment(req)),
             $or: [
                 { forUser: req.user.id },
                 { forRole: req.user.role },
@@ -402,10 +409,11 @@ exports.markAllAsRead = async (req, res) => {
 
         const reminderFilter = {
             isActive: true,
-            nextFollowUpDate: { $exists: true, $ne: null, $lte: tomorrow }
+            nextFollowUpDate: { $exists: true, $ne: null, $lte: tomorrow },
+            ...departmentQuery(resolveDepartment(req))
         };
 
-        if (req.user.role === 'salesperson') {
+        if (!canViewAllInDepartment(req.user.role)) {
             reminderFilter.salesPerson = req.user.id;
         }
 

@@ -52,6 +52,12 @@ const salesEntrySchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    department: {
+        type: String,
+        enum: ['relocation', 'hr'],
+        default: 'relocation',
+        index: true
+    },
     entryDate: {
         type: Date,
         default: Date.now
