@@ -3,10 +3,12 @@ const Notification = require('../models/Notification');
 const User = require('../models/User');
 const { validationResult } = require('express-validator');
 
-const PROGRESS_FIELDS = [
+// Fields a recruiter owns: recruitment progress + date of joining + remarks
+const RECRUITER_FIELDS = [
     'cvsShared', 'interviewsScheduled', 'rejected', 'interviewsCleared',
-    'offersReleased', 'joinees', 'closures', 'remarks'
+    'offersReleased', 'joinees', 'dateOfJoining', 'remarks'
 ];
+// Fields set when assigning a requirement (Admin / Team Leader)
 const ASSIGNMENT_FIELDS = ['salesPersonName', 'clientName', 'position'];
 
 const isAdmin = (u) => u.role === 'admin';
@@ -76,11 +78,13 @@ exports.createEntry = async (req, res) => {
             assignedBy: req.user.id,
             assignedByName: req.user.name,
             department: 'hr',
-            entryDate: req.body.entryDate || new Date()
+            entryDate: req.body.entryDate || new Date(),
+            // Auto-capture the assignment date
+            assignDate: new Date()
         };
-        // Admins may also seed progress fields on creation
+        // Admins may also seed recruiter fields on creation
         if (isAdmin(req.user)) {
-            PROGRESS_FIELDS.forEach((f) => {
+            RECRUITER_FIELDS.forEach((f) => {
                 if (req.body[f] !== undefined) data[f] = req.body[f];
             });
         }
@@ -159,8 +163,7 @@ exports.getStats = async (req, res) => {
                 rejected: { $sum: '$rejected' },
                 interviewsCleared: { $sum: '$interviewsCleared' },
                 offersReleased: { $sum: '$offersReleased' },
-                joinees: { $sum: '$joinees' },
-                closures: { $sum: '$closures' }
+                joinees: { $sum: '$joinees' }
             }
         };
 
@@ -173,11 +176,10 @@ exports.getStats = async (req, res) => {
                         _id: '$recruiterName',
                         requirements: { $sum: 1 },
                         cvsShared: { $sum: '$cvsShared' },
-                        joinees: { $sum: '$joinees' },
-                        closures: { $sum: '$closures' }
+                        joinees: { $sum: '$joinees' }
                     }
                 },
-                { $sort: { closures: -1, joinees: -1 } }
+                { $sort: { joinees: -1, requirements: -1 } }
             ]),
             RecruitmentEntry.aggregate([
                 { $match: match },
@@ -200,8 +202,7 @@ exports.getStats = async (req, res) => {
                     rejected: totals.rejected || 0,
                     interviewsCleared: totals.interviewsCleared || 0,
                     offersReleased: totals.offersReleased || 0,
-                    joinees: totals.joinees || 0,
-                    closures: totals.closures || 0
+                    joinees: totals.joinees || 0
                 },
                 byRecruiter: byRecruiter.map((r) => ({ name: r._id || 'Unassigned', ...r })),
                 byClient: byClient.map((c) => ({ name: c._id || 'Unknown', ...c }))
@@ -251,13 +252,16 @@ exports.updateEntry = async (req, res) => {
         const isOwningTL = isTeamLeader(req.user) && String(entry.assignedBy || '') === req.user.id;
 
         // Decide which fields this user may change
+        // - Admin: full access (assignment + recruiter-owned data)
+        // - Owning Team Leader: only the assignment data they created (NOT recruiter data)
+        // - Assigned Recruiter: only their own recruiter-owned data
         let allowed = [];
         if (isAdmin(req.user)) {
-            allowed = [...ASSIGNMENT_FIELDS, ...PROGRESS_FIELDS];
+            allowed = [...ASSIGNMENT_FIELDS, ...RECRUITER_FIELDS];
         } else if (isOwningTL) {
-            allowed = [...ASSIGNMENT_FIELDS, ...PROGRESS_FIELDS];
+            allowed = [...ASSIGNMENT_FIELDS];
         } else if (isAssignedRecruiter) {
-            allowed = [...PROGRESS_FIELDS];
+            allowed = [...RECRUITER_FIELDS];
         } else {
             return res.status(403).json({ success: false, message: 'Access denied' });
         }
@@ -326,6 +330,8 @@ exports.reassignEntry = async (req, res) => {
         });
         entry.recruiter = newRecruiterId;
         entry.recruiterName = newRecruiterName;
+        // New assignment → refresh the assign date
+        entry.assignDate = new Date();
         await entry.save();
 
         await notifyRecruiter(entry, 'hr_assignment', req.user);

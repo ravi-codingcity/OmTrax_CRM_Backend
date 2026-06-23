@@ -36,7 +36,8 @@ const recruitmentSchema = new mongoose.Schema({
     interviewsCleared: { type: Number, default: 0, min: 0 },
     offersReleased: { type: Number, default: 0, min: 0 },
     joinees: { type: Number, default: 0, min: 0 },
-    closures: { type: Number, default: 0, min: 0 },
+    // Recruiter-only fields
+    dateOfJoining: { type: Date },
     remarks: { type: String, trim: true },
 
     // Ownership / audit
@@ -53,6 +54,11 @@ const recruitmentSchema = new mongoose.Schema({
         index: true
     },
     entryDate: {
+        type: Date,
+        default: Date.now
+    },
+    // Date the requirement was assigned to the current recruiter (auto-set)
+    assignDate: {
         type: Date,
         default: Date.now
     },
