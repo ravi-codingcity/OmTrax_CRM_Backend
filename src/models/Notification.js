@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const notificationSchema = new mongoose.Schema({
     type: {
         type: String,
-        enum: ['followup', 'reminder', 'new_entry', 'business_new', 'business_update'],
+        enum: ['followup', 'reminder', 'new_entry', 'business_new', 'business_update', 'hr_assignment', 'hr_update'],
         required: [true, 'Notification type is required'],
         index: true
     },
@@ -45,7 +45,7 @@ const notificationSchema = new mongoose.Schema({
     },
     forRole: {
         type: String,
-        enum: ['admin', 'salesperson', 'manager', 'recruiter', 'senior_recruiter', 'hr_executive', 'hr_manager', 'hr_head', 'all'],
+        enum: ['admin', 'salesperson', 'manager', 'recruiter', 'team_leader', 'senior_recruiter', 'hr_executive', 'hr_manager', 'hr_head', 'all'],
         default: 'all'
     },
     department: {
@@ -101,6 +101,14 @@ notificationSchema.pre('save', function(next) {
             case 'business_update':
                 this.title = 'Business Updated';
                 this.message = `Business updated for ${this.companyName}`;
+                break;
+            case 'hr_assignment':
+                this.title = 'New Requirement Assigned';
+                this.message = `You were assigned: ${this.companyName}`;
+                break;
+            case 'hr_update':
+                this.title = 'Requirement Updated';
+                this.message = `Progress updated for ${this.companyName}`;
                 break;
         }
     }
