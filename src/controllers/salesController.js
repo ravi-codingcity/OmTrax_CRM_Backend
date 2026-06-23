@@ -324,48 +324,38 @@ exports.getTodayFollowUps = async (req, res) => {
     }
 };
 
-// @desc    Reassign all leads from one salesperson to another
+// @desc    Reassign leads to another salesperson. Supports either a specific
+//          set of leads (leadIds) or, for backward compatibility, every lead
+//          belonging to a source salesperson (fromSalesPerson).
 // @route   POST /api/sales/reassign-leads
 // @access  Private/Admin
 exports.reassignLeads = async (req, res) => {
     try {
-        const { fromSalesPerson, toSalesPerson } = req.body;
+        const { fromSalesPerson, toSalesPerson, leadIds } = req.body;
+        const hasLeadIds = Array.isArray(leadIds) && leadIds.length > 0;
 
         // Validate input
-        if (!fromSalesPerson || !toSalesPerson) {
+        if (!toSalesPerson) {
             return res.status(400).json({
                 success: false,
-                message: 'Both fromSalesPerson and toSalesPerson are required'
+                message: 'Destination salesperson is required'
             });
         }
-
-        if (String(fromSalesPerson) === String(toSalesPerson)) {
+        if (!hasLeadIds && !fromSalesPerson) {
             return res.status(400).json({
                 success: false,
-                message: 'Source and destination salesperson must be different'
+                message: 'Select at least one lead (or a source salesperson) to transfer'
             });
         }
 
-        // Validate both users exist
-        const [fromUser, toUser] = await Promise.all([
-            User.findById(fromSalesPerson),
-            User.findById(toSalesPerson)
-        ]);
-
-        if (!fromUser) {
-            return res.status(404).json({
-                success: false,
-                message: 'Source salesperson not found'
-            });
-        }
-
+        // Validate destination user
+        const toUser = await User.findById(toSalesPerson);
         if (!toUser) {
             return res.status(404).json({
                 success: false,
                 message: 'Destination salesperson not found'
             });
         }
-
         if (!toUser.isActive) {
             return res.status(400).json({
                 success: false,
@@ -373,61 +363,61 @@ exports.reassignLeads = async (req, res) => {
             });
         }
 
-        // Find ALL leads currently owned by the source salesperson within the
-        // active department (includes soft-deleted leads so transfer is complete)
+        // Resolve the set of leads to transfer, scoped to the active department
         const deptFilter = departmentQuery(resolveDepartment(req));
-        const entries = await SalesEntry.find({ salesPerson: fromSalesPerson, ...deptFilter }).select('_id');
-        const entryIds = entries.map((e) => e._id);
+        const findFilter = hasLeadIds
+            ? { _id: { $in: leadIds }, ...deptFilter }
+            : { salesPerson: fromSalesPerson, ...deptFilter };
 
-        if (entryIds.length === 0) {
+        // Load entries with their current owner so per-lead history is accurate
+        const entries = await SalesEntry.find(findFilter).populate('salesPerson', 'name');
+
+        // Exclude leads already owned by the destination (nothing to do)
+        const toTransfer = entries.filter(
+            (e) => String(e.salesPerson?._id || e.salesPerson) !== String(toSalesPerson)
+        );
+
+        if (toTransfer.length === 0) {
             return res.status(200).json({
                 success: true,
-                message: `${fromUser.name} has no leads to transfer`,
-                data: {
-                    transferredCount: 0,
-                    from: { id: fromUser._id, name: fromUser.name },
-                    to: { id: toUser._id, name: toUser.name }
-                }
+                message: 'No leads to transfer',
+                data: { transferredCount: 0, to: { id: toUser._id, name: toUser.name } }
             });
         }
 
-        // History record appended to every transferred lead (preserves complete ownership history)
-        const historyRecord = {
-            salesPerson: fromUser._id,
-            salesPersonName: fromUser.name,
-            branch: fromUser.branch,
-            reassignedBy: req.user.id,
-            reassignedByName: req.user.name,
-            reassignedAt: new Date()
-        };
+        const entryIds = toTransfer.map((e) => e._id);
+        const now = new Date();
 
-        // 1. Transfer lead ownership + align branch to the new owner, keeping audit trail
-        await SalesEntry.updateMany(
-            { salesPerson: fromSalesPerson, ...deptFilter },
-            {
-                $set: { salesPerson: toSalesPerson, branch: toUser.branch },
-                $push: { previousSalesPersons: historyRecord }
+        // 1. Transfer ownership per-lead, recording each lead's previous owner
+        const ops = toTransfer.map((e) => ({
+            updateOne: {
+                filter: { _id: e._id },
+                update: {
+                    $set: { salesPerson: toSalesPerson, branch: toUser.branch },
+                    $push: {
+                        previousSalesPersons: {
+                            salesPerson: e.salesPerson?._id || e.salesPerson,
+                            salesPersonName: e.salesPerson?.name || '',
+                            branch: e.branch,
+                            reassignedBy: req.user.id,
+                            reassignedByName: req.user.name,
+                            reassignedAt: now
+                        }
+                    }
+                }
             }
-        );
+        }));
+        await SalesEntry.bulkWrite(ops);
 
         // 2. Re-point notifications tied to these leads to the new owner
         await Notification.updateMany(
             { salesEntry: { $in: entryIds } },
-            { $set: { salesPerson: toSalesPerson, salesPersonName: toUser.name } }
+            { $set: { salesPerson: toSalesPerson, salesPersonName: toUser.name, forUser: toSalesPerson } }
         );
 
-        // Reminder-style notifications targeted directly at the old user
-        await Notification.updateMany(
-            { salesEntry: { $in: entryIds }, forUser: fromSalesPerson },
-            { $set: { forUser: toSalesPerson } }
-        );
-
-        // 3. Clear the old owner's dismissed reminders for these leads so pending
-        //    follow-ups resurface for the new owner
-        await DismissedReminder.deleteMany({
-            user: fromSalesPerson,
-            salesEntry: { $in: entryIds }
-        });
+        // 3. Clear any dismissed reminders for these leads so pending follow-ups
+        //    resurface for the new owner
+        await DismissedReminder.deleteMany({ salesEntry: { $in: entryIds } });
 
         // Note: FollowUp.addedBy is intentionally preserved to retain the historical
         // record of who performed each follow-up. Follow-ups remain linked to the lead
@@ -435,10 +425,9 @@ exports.reassignLeads = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: `Successfully transferred ${entryIds.length} lead(s) from ${fromUser.name} to ${toUser.name}`,
+            message: `Successfully transferred ${entryIds.length} lead(s) to ${toUser.name}`,
             data: {
                 transferredCount: entryIds.length,
-                from: { id: fromUser._id, name: fromUser.name },
                 to: { id: toUser._id, name: toUser.name }
             }
         });
