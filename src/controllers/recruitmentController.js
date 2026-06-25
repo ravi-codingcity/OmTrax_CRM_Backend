@@ -68,7 +68,8 @@ exports.createEntry = async (req, res) => {
 
         const data = {
             salesPersonName: req.body.salesPersonName,
-            positionReceivedDate: req.body.positionReceivedDate,
+            // Auto-captured on creation — not entered manually
+            positionReceivedDate: new Date(),
             clientName: req.body.clientName,
             position: req.body.position,
             recruiter: recruiterId,
