@@ -8,6 +8,9 @@ const recruitmentSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    positionReceivedDate: {
+        type: Date
+    },
     clientName: {
         type: String,
         required: [true, 'Client name is required'],
@@ -29,15 +32,14 @@ const recruitmentSchema = new mongoose.Schema({
         index: true
     },
 
-    // Progress fields (updated by the assigned Recruiter / Admin)
-    cvsShared: { type: Number, default: 0, min: 0 },
-    interviewsScheduled: { type: Number, default: 0, min: 0 },
-    rejected: { type: Number, default: 0, min: 0 },
-    interviewsCleared: { type: Number, default: 0, min: 0 },
-    offersReleased: { type: Number, default: 0, min: 0 },
-    joinees: { type: Number, default: 0, min: 0 },
-    // Recruiter-only fields
-    dateOfJoining: { type: Date },
+    // Recruiter-only fields (updated by the assigned Recruiter / Admin)
+    cvSubmissionDate: { type: Date },
+    cvsSubmitted: { type: Number, default: 0, min: 0 },
+    feedback: {
+        type: String,
+        enum: ['Hold', 'Rejected', 'Short Listed', 'Feedback Pending'],
+        default: 'Feedback Pending'
+    },
     remarks: { type: String, trim: true },
 
     // Ownership / audit

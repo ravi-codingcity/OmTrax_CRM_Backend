@@ -3,13 +3,10 @@ const Notification = require('../models/Notification');
 const User = require('../models/User');
 const { validationResult } = require('express-validator');
 
-// Fields a recruiter owns: recruitment progress + date of joining + remarks
-const RECRUITER_FIELDS = [
-    'cvsShared', 'interviewsScheduled', 'rejected', 'interviewsCleared',
-    'offersReleased', 'joinees', 'dateOfJoining', 'remarks'
-];
+// Fields the assigned recruiter owns
+const RECRUITER_FIELDS = ['cvSubmissionDate', 'cvsSubmitted', 'feedback', 'remarks'];
 // Fields set when assigning a requirement (Admin / Team Leader)
-const ASSIGNMENT_FIELDS = ['salesPersonName', 'clientName', 'position'];
+const ASSIGNMENT_FIELDS = ['salesPersonName', 'positionReceivedDate', 'clientName', 'position'];
 
 const isAdmin = (u) => u.role === 'admin';
 const isTeamLeader = (u) => u.role === 'team_leader';
@@ -71,6 +68,7 @@ exports.createEntry = async (req, res) => {
 
         const data = {
             salesPersonName: req.body.salesPersonName,
+            positionReceivedDate: req.body.positionReceivedDate,
             clientName: req.body.clientName,
             position: req.body.position,
             recruiter: recruiterId,
@@ -153,57 +151,49 @@ exports.getEntries = async (req, res) => {
 exports.getStats = async (req, res) => {
     try {
         const match = { isActive: true, ...scopeForUser(req.user) };
+        const shortlisted = { $sum: { $cond: [{ $eq: ['$feedback', 'Short Listed'] }, 1, 0] } };
 
-        const sumStage = {
-            $group: {
-                _id: null,
-                total: { $sum: 1 },
-                cvsShared: { $sum: '$cvsShared' },
-                interviewsScheduled: { $sum: '$interviewsScheduled' },
-                rejected: { $sum: '$rejected' },
-                interviewsCleared: { $sum: '$interviewsCleared' },
-                offersReleased: { $sum: '$offersReleased' },
-                joinees: { $sum: '$joinees' }
-            }
-        };
-
-        const [totalsArr, byRecruiter, byClient] = await Promise.all([
-            RecruitmentEntry.aggregate([{ $match: match }, sumStage]),
+        const [totalsArr, feedbackArr, byRecruiter, byClient] = await Promise.all([
+            RecruitmentEntry.aggregate([
+                { $match: match },
+                { $group: { _id: null, total: { $sum: 1 }, cvsSubmitted: { $sum: '$cvsSubmitted' } } }
+            ]),
+            RecruitmentEntry.aggregate([
+                { $match: match },
+                { $group: { _id: '$feedback', count: { $sum: 1 } } }
+            ]),
             RecruitmentEntry.aggregate([
                 { $match: match },
                 {
                     $group: {
                         _id: '$recruiterName',
                         requirements: { $sum: 1 },
-                        cvsShared: { $sum: '$cvsShared' },
-                        joinees: { $sum: '$joinees' }
+                        cvsSubmitted: { $sum: '$cvsSubmitted' },
+                        shortlisted
                     }
                 },
-                { $sort: { joinees: -1, requirements: -1 } }
+                { $sort: { shortlisted: -1, requirements: -1 } }
             ]),
             RecruitmentEntry.aggregate([
                 { $match: match },
-                { $group: { _id: '$clientName', requirements: { $sum: 1 }, joinees: { $sum: '$joinees' } } },
+                { $group: { _id: '$clientName', requirements: { $sum: 1 }, cvsSubmitted: { $sum: '$cvsSubmitted' } } },
                 { $sort: { requirements: -1 } },
                 { $limit: 8 }
             ])
         ]);
 
         const totals = totalsArr[0] || {};
-        delete totals._id;
+        const feedback = { 'Short Listed': 0, Hold: 0, Rejected: 0, 'Feedback Pending': 0 };
+        feedbackArr.forEach((f) => { feedback[f._id || 'Feedback Pending'] = f.count; });
 
         res.status(200).json({
             success: true,
             data: {
                 totals: {
                     total: totals.total || 0,
-                    cvsShared: totals.cvsShared || 0,
-                    interviewsScheduled: totals.interviewsScheduled || 0,
-                    rejected: totals.rejected || 0,
-                    interviewsCleared: totals.interviewsCleared || 0,
-                    offersReleased: totals.offersReleased || 0,
-                    joinees: totals.joinees || 0
+                    cvsSubmitted: totals.cvsSubmitted || 0
                 },
+                feedback,
                 byRecruiter: byRecruiter.map((r) => ({ name: r._id || 'Unassigned', ...r })),
                 byClient: byClient.map((c) => ({ name: c._id || 'Unknown', ...c }))
             }
