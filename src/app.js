@@ -12,6 +12,7 @@ const branchRoutes = require('./routes/branchRoutes');
 const salesVisitRoutes = require('./routes/salesVisitRoutes');
 const businessRoutes = require('./routes/businessRoutes');
 const recruitmentRoutes = require('./routes/recruitmentRoutes');
+const purchaseRoutes = require('./routes/purchaseRoutes');
 
 // Initialize express app
 const app = express();
@@ -64,6 +65,7 @@ app.use('/api/branches', branchRoutes);
 app.use('/api/sales-visits', salesVisitRoutes);
 app.use('/api/business', businessRoutes);
 app.use('/api/recruitment', recruitmentRoutes);
+app.use('/api/purchase', purchaseRoutes);
 
 // ============================================
 // ERROR HANDLING

@@ -93,6 +93,24 @@ exports.authorize = (...roles) => {
     };
 };
 
+// Allow access to a department's module for CRM Admins (any department) or
+// users belonging to that department. Used to gate department-specific modules
+// such as Purchase Management.
+exports.allowDepartment = (department) => {
+    return (req, res, next) => {
+        if (!req.user) {
+            return res.status(401).json({ success: false, message: 'Not authorized' });
+        }
+        if (req.user.role === 'admin' || req.user.department === department) {
+            return next();
+        }
+        return res.status(403).json({
+            success: false,
+            message: `Access restricted to the ${department} department`
+        });
+    };
+};
+
 // Optional auth - doesn't fail if no token, but attaches user if valid token
 exports.optionalAuth = async (req, res, next) => {
     let token;
