@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const purchaseController = require('../controllers/purchaseController');
 const itemController = require('../controllers/itemController');
+const supplierController = require('../controllers/supplierController');
 const { protect, authorize, allowDepartment } = require('../middleware/auth');
 
 const entryValidation = [
@@ -17,6 +18,11 @@ router.use(protect, allowDepartment('purchase'));
 router.route('/items')
     .get(itemController.getItems)
     .post(itemController.createItem);
+
+// Supplier master / autocomplete
+router.route('/suppliers')
+    .get(supplierController.getSuppliers)
+    .post(supplierController.createSupplier);
 
 // Inventory & dashboard
 router.get('/inventory', purchaseController.getInventory);

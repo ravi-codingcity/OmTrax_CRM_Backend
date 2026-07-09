@@ -1,8 +1,11 @@
 const PurchaseEntry = require('../models/PurchaseEntry');
 const Item = require('../models/Item');
+const Supplier = require('../models/Supplier');
 const { validationResult } = require('express-validator');
 const { resolveDepartment, departmentQuery } = require('../utils/department');
 const { validateDispatch, validateReturn, buildInventorySummary } = require('../services/purchaseService');
+
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Ensure the item exists in the master catalogue (so it shows in autocomplete).
 const ensureItem = async (name, category, unit, department, user) => {
@@ -10,13 +13,29 @@ const ensureItem = async (name, category, unit, department, user) => {
     try {
         const existing = await Item.findOne({
             ...departmentQuery(department),
-            name: new RegExp(`^${name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
+            name: new RegExp(`^${escapeRegex(name.trim())}$`, 'i')
         });
         if (!existing) {
             await Item.create({ name: name.trim(), category, unit, department, createdBy: user.id, createdByName: user.name });
         }
     } catch (err) {
         console.error('ensureItem failed:', err.message);
+    }
+};
+
+// Ensure the supplier exists in the supplier master (so it shows in autocomplete).
+const ensureSupplier = async (name, department, user) => {
+    if (!name || !name.trim()) return;
+    try {
+        const existing = await Supplier.findOne({
+            ...departmentQuery(department),
+            name: new RegExp(`^${escapeRegex(name.trim())}$`, 'i')
+        });
+        if (!existing) {
+            await Supplier.create({ name: name.trim(), department, createdBy: user.id, createdByName: user.name });
+        }
+    } catch (err) {
+        console.error('ensureSupplier failed:', err.message);
     }
 };
 
@@ -56,8 +75,9 @@ exports.createEntry = async (req, res) => {
             createdByName: req.user.name
         });
 
-        // Keep the item catalogue up to date for autocomplete
+        // Keep the item & supplier masters up to date for autocomplete
         await ensureItem(itemName, category, unit, department, req.user);
+        await ensureSupplier(supplier, department, req.user);
 
         res.status(201).json({ success: true, message: 'Purchase entry created successfully', data: entry });
     } catch (error) {
