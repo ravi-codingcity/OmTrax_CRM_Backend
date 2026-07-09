@@ -224,6 +224,11 @@ exports.updateSalesEntry = async (req, res) => {
             req.body.convertedDate = new Date();
         }
 
+        // Working the lead (a status change) clears the "newly assigned" highlight
+        if (req.body.queryStatus !== undefined && req.body.queryStatus !== salesEntry.queryStatus) {
+            req.body.newlyAssigned = false;
+        }
+
         salesEntry = await SalesEntry.findByIdAndUpdate(
             req.params.id,
             req.body,
@@ -393,7 +398,8 @@ exports.reassignLeads = async (req, res) => {
             updateOne: {
                 filter: { _id: e._id },
                 update: {
-                    $set: { salesPerson: toSalesPerson, branch: toUser.branch },
+                    // Flag the lead as newly assigned so the new owner can spot it
+                    $set: { salesPerson: toSalesPerson, branch: toUser.branch, newlyAssigned: true, assignedAt: now },
                     $push: {
                         previousSalesPersons: {
                             salesPerson: e.salesPerson?._id || e.salesPerson,

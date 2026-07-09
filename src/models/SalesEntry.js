@@ -103,6 +103,16 @@ const salesEntrySchema = new mongoose.Schema({
             default: Date.now
         }
     }],
+    // Set true when a lead is (re)assigned so the new owner can spot it easily.
+    // Cleared automatically when the owner works the lead (status change) or it
+    // is reassigned again.
+    newlyAssigned: {
+        type: Boolean,
+        default: false
+    },
+    assignedAt: {
+        type: Date
+    },
     isActive: {
         type: Boolean,
         default: true

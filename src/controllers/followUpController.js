@@ -38,6 +38,8 @@ exports.addFollowUp = async (req, res) => {
         salesEntry.lastFollowUpDate = new Date();
         // Do NOT overwrite salesEntry.remark — it holds the original creation remark (Initial Entry)
         salesEntry.queryStatus = status || salesEntry.queryStatus;
+        // Working the lead clears the "newly assigned" highlight for the owner
+        salesEntry.newlyAssigned = false;
         
         if (nextFollowUpDate) {
             salesEntry.nextFollowUpDate = nextFollowUpDate;
