@@ -2,7 +2,7 @@
 // Frequently-used items are predefined here so they are always available in the
 // autocomplete, even before any have been created manually in the database.
 
-const UNITS = ['Piece', 'Box', 'Kg', 'Gram', 'Litre', 'Metre', 'Roll', 'Packet', 'Set', 'Dozen', 'Bundle'];
+const UNITS = ['Piece', 'Box', 'Kg', 'Gram', 'Litre', 'Metre', 'Roll', 'Packet', 'Set', 'Dozen', 'Bundle', 'Pair'];
 
 const CATEGORIES = [
     'Packing Material',
@@ -17,23 +17,51 @@ const CATEGORIES = [
     'Other',
 ];
 
-// Predefined frequently-used items (master catalogue).
+// OmTrax Purchase Material Master List — predefined so they always appear as
+// autocomplete suggestions in the Item field, even before any are created manually.
 const MASTER_ITEMS = [
-    { name: 'Corrugated Box', category: 'Packing Material', unit: 'Piece' },
-    { name: 'Bubble Wrap Roll', category: 'Packing Material', unit: 'Roll' },
-    { name: 'Stretch Wrap Roll', category: 'Packing Material', unit: 'Roll' },
-    { name: 'Packing Tape', category: 'Packing Material', unit: 'Piece' },
-    { name: 'Foam Sheet', category: 'Packing Material', unit: 'Roll' },
-    { name: 'Carton Sheet', category: 'Packing Material', unit: 'Piece' },
-    { name: 'Wooden Crate', category: 'Packing Material', unit: 'Piece' },
-    { name: 'Marker Pen', category: 'Stationery', unit: 'Piece' },
-    { name: 'A4 Paper', category: 'Stationery', unit: 'Packet' },
-    { name: 'Stapler', category: 'Stationery', unit: 'Piece' },
-    { name: 'Cutter Blade', category: 'Tools', unit: 'Piece' },
-    { name: 'Rope', category: 'Hardware', unit: 'Metre' },
-    { name: 'Cable Tie', category: 'Hardware', unit: 'Packet' },
-    { name: 'Gloves', category: 'Safety Equipment', unit: 'Pair' },
-    { name: 'Trolley', category: 'Tools', unit: 'Piece' },
+    { name: 'Book Carton Box – 18" × 15" × 12" (5 Ply)', category: 'Packing Material', unit: 'Piece' },
+    { name: 'Medium Carton Box – 20" × 18" × 20" (5 Ply)', category: 'Packing Material', unit: 'Piece' },
+    { name: 'Clothes Carton Box – 30" × 18" × 12" (5 Ply)', category: 'Packing Material', unit: 'Piece' },
+    { name: 'Corrugated Roll – 2 Ply, 180 GSM', category: 'Packing Material', unit: 'Roll' },
+    { name: 'Newspaper Packing Paper', category: 'Packing Material', unit: 'Kg' },
+    { name: 'White Packing Paper', category: 'Packing Material', unit: 'Kg' },
+    { name: 'Thermocol Sheet – 1 Inch', category: 'Packing Material', unit: 'Piece' },
+    { name: 'Air Bubble Roll – 50 GSM, 1 Meter Width × 100 Meter Roll', category: 'Packing Material', unit: 'Roll' },
+    { name: 'OmTrax Printed Packing Tape', category: 'Packing Material', unit: 'Piece' },
+    { name: 'Fragile Tape', category: 'Packing Material', unit: 'Piece' },
+    { name: 'Stretch Film Roll', category: 'Packing Material', unit: 'Roll' },
+    { name: 'EPE Foam Roll – 3 mm', category: 'Packing Material', unit: 'Roll' },
+    { name: 'Moving Blankets / Carpets', category: 'Packing Material', unit: 'Piece' },
+    { name: 'Hand Pallet Truck', category: 'Tools', unit: 'Piece' },
+    { name: 'Iron Trolley', category: 'Tools', unit: 'Piece' },
+    { name: 'Thermocol Boxes', category: 'Packing Material', unit: 'Piece' },
+    { name: 'Plastic Storage Boxes', category: 'Packing Material', unit: 'Piece' },
+    { name: 'Vehicle Security Seal', category: 'Safety Equipment', unit: 'Piece' },
+    { name: 'Plywood Sheet – 9 mm', category: 'Hardware', unit: 'Piece' },
+    { name: 'Plywood Sheet – 12 mm', category: 'Hardware', unit: 'Piece' },
+    { name: 'Plywood Sheet – 18 mm', category: 'Hardware', unit: 'Piece' },
+    { name: 'Wooden Block – 3" × 3" × 8 ft', category: 'Hardware', unit: 'Piece' },
+    { name: 'Wooden Block – 4" × 4" × 8 ft', category: 'Hardware', unit: 'Piece' },
+    { name: 'Safety Glasses', category: 'Safety Equipment', unit: 'Piece' },
+    { name: 'Safety Helmet', category: 'Safety Equipment', unit: 'Piece' },
+    { name: 'Safety Gloves', category: 'Safety Equipment', unit: 'Pair' },
+    { name: 'OmTrax Stickers', category: 'Stationery', unit: 'Piece' },
+    { name: 'Fragile Stickers', category: 'Stationery', unit: 'Piece' },
+    { name: 'Arrow Direction Stickers', category: 'Stationery', unit: 'Piece' },
+    { name: 'Safety Shoes', category: 'Safety Equipment', unit: 'Pair' },
+    { name: 'Hammer', category: 'Tools', unit: 'Piece' },
+    { name: 'Belt (Patti) with Tensioning Machine', category: 'Tools', unit: 'Set' },
+    { name: 'Packing Rope (Sutli)', category: 'Packing Material', unit: 'Kg' },
+    { name: 'Pine Batten – 3" × 1", 10 ft', category: 'Hardware', unit: 'Piece' },
+    { name: 'EPE L-Section – 50 × 50 mm, 15 mm Thickness', category: 'Packing Material', unit: 'Piece' },
+    { name: 'EPE Foam Roll – 6 mm × 70 m', category: 'Packing Material', unit: 'Roll' },
+    { name: 'Safeda Wood – 3" × 1", 8 ft', category: 'Hardware', unit: 'Piece' },
+    { name: 'Angle Corner Protector – 60 × 60 mm, 4 mm Thickness', category: 'Packing Material', unit: 'Piece' },
+    { name: 'Thermocol Sheet – D8, 16" × 34", 1 Inch', category: 'Packing Material', unit: 'Piece' },
+    { name: 'Honeycomb Board – 20 mm, 6 ft × 4 ft', category: 'Packing Material', unit: 'Piece' },
+    { name: 'EPE Foam Sheet – 4 mm', category: 'Packing Material', unit: 'Piece' },
+    { name: 'EPE Foam Sheet – 6 ft × 4 ft, 20 mm Thickness', category: 'Packing Material', unit: 'Piece' },
 ];
 
 module.exports = { UNITS, CATEGORIES, MASTER_ITEMS };
