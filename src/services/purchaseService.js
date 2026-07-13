@@ -5,14 +5,25 @@
 // Net quantity currently out on jobs = dispatched − returned.
 const netDispatched = (entry) => (entry.totalDispatched || 0) - (entry.totalReturned || 0);
 
-// Validate a new dispatch. Cannot dispatch more than what is available in stock.
-const validateDispatch = (entry, quantity) => {
-    const qty = Number(quantity);
+// Validate a new dispatch:
+//  - cannot dispatch more than what is available in stock
+//  - a purpose is mandatory
+//  - it must be traceable: either a Job Number, or a reason for not having one
+const validateDispatch = (entry, payload = {}) => {
+    const qty = Number(payload.quantity);
     if (!qty || qty <= 0) {
         return { ok: false, message: 'Dispatch quantity must be greater than 0' };
     }
     if (qty > (entry.availableStock || 0)) {
         return { ok: false, message: `Only ${entry.availableStock} unit(s) available in stock` };
+    }
+    if (!payload.purpose || !String(payload.purpose).trim()) {
+        return { ok: false, message: 'Purpose of dispatch is required' };
+    }
+    const hasJob = payload.jobNumber && String(payload.jobNumber).trim();
+    const hasReason = payload.noJobNumberReason && String(payload.noJobNumberReason).trim();
+    if (!hasJob && !hasReason) {
+        return { ok: false, message: 'Enter a Job Number, or a reason for dispatching without one' };
     }
     return { ok: true };
 };

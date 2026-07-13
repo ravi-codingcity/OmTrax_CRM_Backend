@@ -9,7 +9,7 @@ const DEFAULT_DEPARTMENT = 'relocation';
 const ROLES_BY_DEPARTMENT = {
     relocation: ['salesperson', 'manager', 'admin'],
     hr: ['recruiter', 'team_leader', 'admin'],
-    purchase: ['purchase_manager'],
+    purchase: ['purchase_manager', 'branch_manager', 'warehouse_manager'],
 };
 
 // Older HR roles kept valid in the schema so existing accounts never break,
@@ -20,8 +20,11 @@ const LEGACY_ROLES = ['senior_recruiter', 'hr_executive', 'hr_manager', 'hr_head
 const ALL_ROLES = [...new Set([...Object.values(ROLES_BY_DEPARTMENT).flat(), ...LEGACY_ROLES])];
 
 // Roles that can view all entries within their department (vs. only their own).
-// Purchase Managers manage the whole Purchase department's data.
-const FULL_ACCESS_ROLES = ['admin', 'manager', 'hr_manager', 'hr_head', 'purchase_manager'];
+// All Purchase department roles manage the department's shared inventory data.
+const FULL_ACCESS_ROLES = [
+    'admin', 'manager', 'hr_manager', 'hr_head',
+    'purchase_manager', 'branch_manager', 'warehouse_manager',
+];
 
 const isValidDepartment = (d) => DEPARTMENTS.includes(d);
 

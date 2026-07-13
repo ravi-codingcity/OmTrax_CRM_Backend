@@ -209,17 +209,23 @@ exports.addDispatch = async (req, res) => {
         const entry = await PurchaseEntry.findById(req.params.id);
         if (!entry) return res.status(404).json({ success: false, message: 'Purchase entry not found' });
 
-        const check = validateDispatch(entry, req.body.quantity);
+        const check = validateDispatch(entry, req.body);
         if (!check.ok) return res.status(400).json({ success: false, message: check.message });
 
         entry.dispatches.push({
             dispatchDate: req.body.dispatchDate || new Date(),
             quantity: Number(req.body.quantity),
             location: req.body.location,
+            purpose: req.body.purpose,
+            jobNumber: req.body.jobNumber,
+            noJobNumberReason: req.body.noJobNumberReason,
             createdBy: req.user.id,
             createdByName: req.user.name
         });
         await entry.save();
+
+        // A new destination branch/warehouse becomes available for future selections
+        await ensureStorageLocation(req.body.location, resolveDepartment(req), req.user);
 
         res.status(200).json({ success: true, message: 'Dispatch recorded successfully', data: entry });
     } catch (error) {

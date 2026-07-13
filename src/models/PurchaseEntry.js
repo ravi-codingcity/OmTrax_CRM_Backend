@@ -1,10 +1,15 @@
 const mongoose = require('mongoose');
 
 // A single dispatch (movement out) of a purchased item.
+// Every dispatch must state its purpose, and must be traceable to either a
+// customer Job Number or a documented reason for having none.
 const dispatchSchema = new mongoose.Schema({
     dispatchDate: { type: Date, default: Date.now },
     quantity: { type: Number, required: true, min: 0 },
-    location: { type: String, trim: true }, // branch / destination
+    location: { type: String, trim: true }, // destination branch / warehouse
+    purpose: { type: String, trim: true, required: true }, // why it is being dispatched
+    jobNumber: { type: String, trim: true }, // customer project / job reference
+    noJobNumberReason: { type: String, trim: true }, // required when jobNumber is absent
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     createdByName: { type: String, trim: true }
 }, { timestamps: true });
