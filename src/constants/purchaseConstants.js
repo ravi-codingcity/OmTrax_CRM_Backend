@@ -4,6 +4,21 @@
 
 const UNITS = ['Piece', 'Box', 'Kg', 'Gram', 'Litre', 'Metre', 'Roll', 'Packet', 'Set', 'Dozen', 'Bundle', 'Pair'];
 
+// Predefined storage locations — where purchased material is stored.
+// Users can add new warehouses / branches; those are saved to the DB master.
+const STORAGE_LOCATIONS = [
+    'Our Warehouse – Gurugram',
+    'Delhi',
+    'Chennai',
+    'Mumbai',
+    'Jaipur',
+    'Ahmedabad',
+    'Pune',
+    'Hyderabad',
+    'Kolkata',
+];
+
+// Item categories (item-master metadata only — no longer part of purchase entries)
 const CATEGORIES = [
     'Packing Material',
     'Stationery',
@@ -64,4 +79,4 @@ const MASTER_ITEMS = [
     { name: 'EPE Foam Sheet – 6 ft × 4 ft, 20 mm Thickness', category: 'Packing Material', unit: 'Piece' },
 ];
 
-module.exports = { UNITS, CATEGORIES, MASTER_ITEMS };
+module.exports = { UNITS, CATEGORIES, STORAGE_LOCATIONS, MASTER_ITEMS };

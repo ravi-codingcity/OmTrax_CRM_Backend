@@ -38,8 +38,8 @@ const buildInventorySummary = (entries) => {
         if (!byItem[key]) {
             byItem[key] = {
                 itemName: key,
-                category: e.category || '',
                 unit: e.unit || '',
+                storageLocations: new Set(),
                 totalPurchased: 0,
                 totalDispatched: 0,
                 totalReturned: 0,
@@ -48,13 +48,17 @@ const buildInventorySummary = (entries) => {
             };
         }
         const row = byItem[key];
+        if (e.storageLocation) row.storageLocations.add(e.storageLocation);
         row.totalPurchased += e.quantityPurchased || 0;
         row.totalDispatched += e.totalDispatched || 0;
         row.totalReturned += e.totalReturned || 0;
         row.availableStock += e.availableStock || 0;
         row.entries += 1;
     });
-    return Object.values(byItem).sort((a, b) => b.totalPurchased - a.totalPurchased);
+    // Serialise the location Set so it survives JSON transport
+    return Object.values(byItem)
+        .map((r) => ({ ...r, storageLocations: [...r.storageLocations] }))
+        .sort((a, b) => b.totalPurchased - a.totalPurchased);
 };
 
 module.exports = { netDispatched, validateDispatch, validateReturn, buildInventorySummary };

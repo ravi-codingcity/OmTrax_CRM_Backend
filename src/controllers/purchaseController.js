@@ -1,6 +1,7 @@
 const PurchaseEntry = require('../models/PurchaseEntry');
 const Item = require('../models/Item');
 const Supplier = require('../models/Supplier');
+const StorageLocation = require('../models/StorageLocation');
 const { validationResult } = require('express-validator');
 const { resolveDepartment, departmentQuery } = require('../utils/department');
 const { validateDispatch, validateReturn, buildInventorySummary } = require('../services/purchaseService');
@@ -8,7 +9,7 @@ const { validateDispatch, validateReturn, buildInventorySummary } = require('../
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Ensure the item exists in the master catalogue (so it shows in autocomplete).
-const ensureItem = async (name, category, unit, department, user) => {
+const ensureItem = async (name, unit, department, user) => {
     if (!name) return;
     try {
         const existing = await Item.findOne({
@@ -16,10 +17,32 @@ const ensureItem = async (name, category, unit, department, user) => {
             name: new RegExp(`^${escapeRegex(name.trim())}$`, 'i')
         });
         if (!existing) {
-            await Item.create({ name: name.trim(), category, unit, department, createdBy: user.id, createdByName: user.name });
+            await Item.create({ name: name.trim(), unit, department, createdBy: user.id, createdByName: user.name });
         }
     } catch (err) {
         console.error('ensureItem failed:', err.message);
+    }
+};
+
+// Ensure the storage location exists in the master (so it shows in autocomplete).
+const ensureStorageLocation = async (name, department, user) => {
+    if (!name || !name.trim()) return;
+    try {
+        const existing = await StorageLocation.findOne({
+            ...departmentQuery(department),
+            name: new RegExp(`^${escapeRegex(name.trim())}$`, 'i')
+        });
+        if (!existing) {
+            await StorageLocation.create({
+                name: name.trim(),
+                type: /warehouse/i.test(name) ? 'Warehouse' : 'Branch',
+                department,
+                createdBy: user.id,
+                createdByName: user.name
+            });
+        }
+    } catch (err) {
+        console.error('ensureStorageLocation failed:', err.message);
     }
 };
 
@@ -51,7 +74,7 @@ exports.createEntry = async (req, res) => {
 
         const department = resolveDepartment(req);
         const {
-            itemName, category, supplier, purchaseDate, quantityPurchased,
+            itemName, storageLocation, supplier, purchaseDate, quantityPurchased,
             unit, unitPrice, totalAmount, invoiceNumber, remarks
         } = req.body;
 
@@ -61,7 +84,7 @@ exports.createEntry = async (req, res) => {
 
         const entry = await PurchaseEntry.create({
             itemName,
-            category,
+            storageLocation,
             supplier,
             purchaseDate: purchaseDate || new Date(),
             quantityPurchased: qty,
@@ -75,9 +98,10 @@ exports.createEntry = async (req, res) => {
             createdByName: req.user.name
         });
 
-        // Keep the item & supplier masters up to date for autocomplete
-        await ensureItem(itemName, category, unit, department, req.user);
+        // Keep the item, supplier & storage-location masters up to date for autocomplete
+        await ensureItem(itemName, unit, department, req.user);
         await ensureSupplier(supplier, department, req.user);
+        await ensureStorageLocation(storageLocation, department, req.user);
 
         res.status(201).json({ success: true, message: 'Purchase entry created successfully', data: entry });
     } catch (error) {
@@ -91,15 +115,15 @@ exports.createEntry = async (req, res) => {
 // @access  Private (purchase / admin)
 exports.getEntries = async (req, res) => {
     try {
-        const { search, category, page = 1, limit = 1000 } = req.query;
+        const { search, storageLocation, page = 1, limit = 1000 } = req.query;
         const filter = { isActive: true, ...departmentQuery(resolveDepartment(req)) };
-        if (category) filter.category = category;
+        if (storageLocation) filter.storageLocation = storageLocation;
         if (search) {
             filter.$or = [
                 { itemName: { $regex: search, $options: 'i' } },
                 { supplier: { $regex: search, $options: 'i' } },
                 { invoiceNumber: { $regex: search, $options: 'i' } },
-                { category: { $regex: search, $options: 'i' } }
+                { storageLocation: { $regex: search, $options: 'i' } }
             ];
         }
 
@@ -144,7 +168,7 @@ exports.updateEntry = async (req, res) => {
         const entry = await PurchaseEntry.findById(req.params.id);
         if (!entry) return res.status(404).json({ success: false, message: 'Purchase entry not found' });
 
-        const editable = ['itemName', 'category', 'supplier', 'purchaseDate', 'quantityPurchased', 'unit', 'unitPrice', 'totalAmount', 'invoiceNumber', 'remarks'];
+        const editable = ['itemName', 'storageLocation', 'supplier', 'purchaseDate', 'quantityPurchased', 'unit', 'unitPrice', 'totalAmount', 'invoiceNumber', 'remarks'];
         editable.forEach((f) => {
             if (req.body[f] !== undefined) entry[f] = req.body[f];
         });
@@ -236,7 +260,7 @@ exports.addReturn = async (req, res) => {
 exports.getInventory = async (req, res) => {
     try {
         const entries = await PurchaseEntry.find({ isActive: true, ...departmentQuery(resolveDepartment(req)) })
-            .select('itemName category unit quantityPurchased totalDispatched totalReturned availableStock');
+            .select('itemName storageLocation unit quantityPurchased totalDispatched totalReturned availableStock');
         res.status(200).json({ success: true, data: buildInventorySummary(entries) });
     } catch (error) {
         console.error('Get inventory error:', error);
@@ -250,7 +274,7 @@ exports.getInventory = async (req, res) => {
 exports.getStats = async (req, res) => {
     try {
         const entries = await PurchaseEntry.find({ isActive: true, ...departmentQuery(resolveDepartment(req)) })
-            .select('itemName category quantityPurchased totalDispatched totalReturned availableStock totalAmount');
+            .select('itemName storageLocation unit quantityPurchased totalDispatched totalReturned availableStock totalAmount');
 
         const inventory = buildInventorySummary(entries);
         const totals = entries.reduce((acc, e) => {

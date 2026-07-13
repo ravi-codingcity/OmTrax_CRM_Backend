@@ -21,7 +21,8 @@ const purchaseEntrySchema = new mongoose.Schema({
     // Procurement details
     itemName: { type: String, required: [true, 'Item name is required'], trim: true, index: true },
     item: { type: mongoose.Schema.Types.ObjectId, ref: 'Item' },
-    category: { type: String, trim: true },
+    // Where the purchased material is stored (warehouse / branch / office)
+    storageLocation: { type: String, trim: true, index: true },
     supplier: { type: String, trim: true }, // supplier / vendor
     purchaseDate: { type: Date, default: Date.now },
     quantityPurchased: { type: Number, required: [true, 'Quantity is required'], min: 0 },

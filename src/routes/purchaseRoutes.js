@@ -4,6 +4,7 @@ const { body } = require('express-validator');
 const purchaseController = require('../controllers/purchaseController');
 const itemController = require('../controllers/itemController');
 const supplierController = require('../controllers/supplierController');
+const storageLocationController = require('../controllers/storageLocationController');
 const { protect, authorize, allowDepartment } = require('../middleware/auth');
 
 const entryValidation = [
@@ -23,6 +24,11 @@ router.route('/items')
 router.route('/suppliers')
     .get(supplierController.getSuppliers)
     .post(supplierController.createSupplier);
+
+// Storage location master (warehouse / branch) / autocomplete
+router.route('/locations')
+    .get(storageLocationController.getLocations)
+    .post(storageLocationController.createLocation);
 
 // Inventory & dashboard
 router.get('/inventory', purchaseController.getInventory);
