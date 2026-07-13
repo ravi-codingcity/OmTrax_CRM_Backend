@@ -4,11 +4,9 @@
 
 const UNITS = ['Piece', 'Box', 'Kg', 'Gram', 'Litre', 'Metre', 'Roll', 'Packet', 'Set', 'Dozen', 'Bundle', 'Pair'];
 
-// Predefined branches / warehouses. Used everywhere a Branch or Location is
-// selected in the Purchase module (storage location AND dispatch location).
+// Predefined branches / warehouses used wherever a Storage Location is selected.
 // New locations added by users are saved to the DB master — no code change needed.
 const STORAGE_LOCATIONS = [
-    'Our Warehouse – Gurugram',
     'Delhi',
     'Chennai',
     'Mumbai',
@@ -18,18 +16,6 @@ const STORAGE_LOCATIONS = [
     'Hyderabad',
     'Kolkata',
     'Gurugram',
-];
-
-// Why material is being dispatched (mandatory on every dispatch)
-const DISPATCH_PURPOSES = [
-    'Customer Project',
-    'Office Use',
-    'Branch Transfer',
-    'Warehouse Transfer',
-    'Maintenance',
-    'Sample',
-    'Emergency Requirement',
-    'Other',
 ];
 
 // Item categories (item-master metadata only — no longer part of purchase entries)
@@ -93,4 +79,4 @@ const MASTER_ITEMS = [
     { name: 'EPE Foam Sheet – 6 ft × 4 ft, 20 mm Thickness', category: 'Packing Material', unit: 'Piece' },
 ];
 
-module.exports = { UNITS, CATEGORIES, STORAGE_LOCATIONS, DISPATCH_PURPOSES, MASTER_ITEMS };
+module.exports = { UNITS, CATEGORIES, STORAGE_LOCATIONS, MASTER_ITEMS };

@@ -4,7 +4,17 @@ const Supplier = require('../models/Supplier');
 const StorageLocation = require('../models/StorageLocation');
 const { validationResult } = require('express-validator');
 const { resolveDepartment, departmentQuery } = require('../utils/department');
-const { validateDispatch, validateReturn, buildInventorySummary } = require('../services/purchaseService');
+const { validateDispatch, validateReturn, canModifyEntry, buildInventorySummary } = require('../services/purchaseService');
+
+// 403 helper — only the record's creator (or a CRM Admin) may modify it.
+const denyIfNotOwner = (entry, req, res) => {
+    if (canModifyEntry(entry, req.user)) return false;
+    res.status(403).json({
+        success: false,
+        message: 'You can only modify purchase records that you created'
+    });
+    return true;
+};
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -167,6 +177,7 @@ exports.updateEntry = async (req, res) => {
     try {
         const entry = await PurchaseEntry.findById(req.params.id);
         if (!entry) return res.status(404).json({ success: false, message: 'Purchase entry not found' });
+        if (denyIfNotOwner(entry, req, res)) return;
 
         const editable = ['itemName', 'storageLocation', 'supplier', 'purchaseDate', 'quantityPurchased', 'unit', 'unitPrice', 'totalAmount', 'invoiceNumber', 'remarks'];
         editable.forEach((f) => {
@@ -209,23 +220,20 @@ exports.addDispatch = async (req, res) => {
         const entry = await PurchaseEntry.findById(req.params.id);
         if (!entry) return res.status(404).json({ success: false, message: 'Purchase entry not found' });
 
+        if (denyIfNotOwner(entry, req, res)) return;
+
         const check = validateDispatch(entry, req.body);
         if (!check.ok) return res.status(400).json({ success: false, message: check.message });
 
         entry.dispatches.push({
             dispatchDate: req.body.dispatchDate || new Date(),
             quantity: Number(req.body.quantity),
-            location: req.body.location,
-            purpose: req.body.purpose,
-            jobNumber: req.body.jobNumber,
-            noJobNumberReason: req.body.noJobNumberReason,
+            jobNumber: String(req.body.jobNumber).trim(),
+            remark: req.body.remark,
             createdBy: req.user.id,
             createdByName: req.user.name
         });
         await entry.save();
-
-        // A new destination branch/warehouse becomes available for future selections
-        await ensureStorageLocation(req.body.location, resolveDepartment(req), req.user);
 
         res.status(200).json({ success: true, message: 'Dispatch recorded successfully', data: entry });
     } catch (error) {
@@ -241,6 +249,8 @@ exports.addReturn = async (req, res) => {
     try {
         const entry = await PurchaseEntry.findById(req.params.id);
         if (!entry) return res.status(404).json({ success: false, message: 'Purchase entry not found' });
+
+        if (denyIfNotOwner(entry, req, res)) return;
 
         const check = validateReturn(entry, req.body.quantity);
         if (!check.ok) return res.status(400).json({ success: false, message: check.message });

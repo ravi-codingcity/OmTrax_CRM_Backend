@@ -7,8 +7,7 @@ const netDispatched = (entry) => (entry.totalDispatched || 0) - (entry.totalRetu
 
 // Validate a new dispatch:
 //  - cannot dispatch more than what is available in stock
-//  - a purpose is mandatory
-//  - it must be traceable: either a Job Number, or a reason for not having one
+//  - a Job Number is mandatory (every dispatch must be traceable to a job)
 const validateDispatch = (entry, payload = {}) => {
     const qty = Number(payload.quantity);
     if (!qty || qty <= 0) {
@@ -17,15 +16,21 @@ const validateDispatch = (entry, payload = {}) => {
     if (qty > (entry.availableStock || 0)) {
         return { ok: false, message: `Only ${entry.availableStock} unit(s) available in stock` };
     }
-    if (!payload.purpose || !String(payload.purpose).trim()) {
-        return { ok: false, message: 'Purpose of dispatch is required' };
-    }
-    const hasJob = payload.jobNumber && String(payload.jobNumber).trim();
-    const hasReason = payload.noJobNumberReason && String(payload.noJobNumberReason).trim();
-    if (!hasJob && !hasReason) {
-        return { ok: false, message: 'Enter a Job Number, or a reason for dispatching without one' };
+    if (!payload.jobNumber || !String(payload.jobNumber).trim()) {
+        return { ok: false, message: 'Job Number is required' };
     }
     return { ok: true };
+};
+
+// Write access to a purchase record:
+//  - CRM Admin can modify anything
+//  - other Purchase staff may only modify records they personally created
+//    (everyone can still *view* all records across every location)
+const canModifyEntry = (entry, user) => {
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    const owner = entry?.createdBy ? String(entry.createdBy._id || entry.createdBy) : '';
+    return !!owner && owner === String(user.id);
 };
 
 // Validate a return. Cannot return more than what is currently out on jobs.
@@ -72,4 +77,4 @@ const buildInventorySummary = (entries) => {
         .sort((a, b) => b.totalPurchased - a.totalPurchased);
 };
 
-module.exports = { netDispatched, validateDispatch, validateReturn, buildInventorySummary };
+module.exports = { netDispatched, validateDispatch, validateReturn, canModifyEntry, buildInventorySummary };
