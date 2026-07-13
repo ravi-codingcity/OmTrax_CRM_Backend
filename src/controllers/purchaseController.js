@@ -106,7 +106,8 @@ exports.createEntry = async (req, res) => {
             department,
             createdBy: req.user.id,
             createdByName: req.user.name,
-            createdByUsername: req.user.username
+            createdByUsername: req.user.username,
+            createdByBranch: req.user.branch
         });
 
         // Keep the item, supplier & storage-location masters up to date for autocomplete
@@ -143,7 +144,7 @@ exports.getEntries = async (req, res) => {
 
         const [entries, total] = await Promise.all([
             PurchaseEntry.find(filter)
-                .populate('createdBy', 'name username')
+                .populate('createdBy', 'name username branch')
                 .sort({ createdAt: -1 })
                 .skip((pageNum - 1) * limitNum)
                 .limit(limitNum),
@@ -166,7 +167,7 @@ exports.getEntries = async (req, res) => {
 // @access  Private (purchase / admin)
 exports.getEntry = async (req, res) => {
     try {
-        const entry = await PurchaseEntry.findById(req.params.id).populate('createdBy', 'name username');
+        const entry = await PurchaseEntry.findById(req.params.id).populate('createdBy', 'name username branch');
         if (!entry) return res.status(404).json({ success: false, message: 'Purchase entry not found' });
         res.status(200).json({ success: true, data: entry });
     } catch (error) {

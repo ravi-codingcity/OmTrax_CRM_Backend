@@ -52,6 +52,7 @@ const purchaseEntrySchema = new mongoose.Schema({
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     createdByName: { type: String, trim: true },
     createdByUsername: { type: String, trim: true }, // login username, for traceability
+    createdByBranch: { type: String, trim: true },   // creator's branch / location snapshot
     isActive: { type: Boolean, default: true }
 }, {
     timestamps: true
