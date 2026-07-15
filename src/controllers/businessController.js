@@ -1,7 +1,26 @@
 const Business = require('../models/Business');
+const User = require('../models/User');
 const Notification = require('../models/Notification');
 const { validationResult } = require('express-validator');
 const { resolveDepartment, departmentQuery, canViewAllInDepartment } = require('../utils/department');
+
+// A "business_sub" is a sandboxed temporary account that acts entirely on behalf
+// of a single linked salesperson: everything it creates is owned by that
+// salesperson, and it can only see that salesperson's entries. Resolve the
+// linked owner (name/branch/department) once, or null for a normal user.
+const resolveLinkedOwner = async (req) => {
+    if (req.user.role !== 'business_sub' || !req.user.linkedSalesPerson) return null;
+    const owner = await User.findById(req.user.linkedSalesPerson).select('name branch department');
+    if (!owner) return null;
+    return {
+        id: owner._id,
+        name: owner.name,
+        branch: owner.branch,
+        department: owner.department || 'relocation'
+    };
+};
+
+const isBusinessSub = (req) => req.user.role === 'business_sub';
 
 // Helper: create a notification visible to both the salesperson (forUser)
 // and admins (forRole). One document satisfies the getNotifications $or filter
@@ -38,11 +57,22 @@ exports.createBusiness = async (req, res) => {
 
         const { client, jobNumber, estimateAmount, remarks } = req.body;
 
-        // Salesperson can only create for themselves; admin may pass an explicit salesPerson
-        const salesPersonId =
-            req.user.role === 'admin' && req.body.salesPerson
+        // Sub-user: force ownership onto the linked salesperson (data reflects
+        // under their account). Salesperson: only for themselves. Admin: may
+        // pass an explicit salesPerson.
+        const linkedOwner = await resolveLinkedOwner(req);
+        if (isBusinessSub(req) && !linkedOwner) {
+            return res.status(403).json({
+                success: false,
+                message: 'Sub-user is not linked to a salesperson'
+            });
+        }
+
+        const salesPersonId = linkedOwner
+            ? linkedOwner.id
+            : (req.user.role === 'admin' && req.body.salesPerson
                 ? req.body.salesPerson
-                : req.user.id;
+                : req.user.id);
 
         const businessData = {
             client,
@@ -50,9 +80,9 @@ exports.createBusiness = async (req, res) => {
             estimateAmount,
             remarks,
             salesPerson: salesPersonId,
-            salesPersonName: req.body.salesPersonName || req.user.name,
-            branch: req.body.branch || req.user.branch,
-            department: resolveDepartment(req),
+            salesPersonName: linkedOwner ? linkedOwner.name : (req.body.salesPersonName || req.user.name),
+            branch: linkedOwner ? linkedOwner.branch : (req.body.branch || req.user.branch),
+            department: linkedOwner ? linkedOwner.department : resolveDepartment(req),
             entryDate: req.body.entryDate || new Date()
         };
 
@@ -106,8 +136,13 @@ exports.getBusinessEntries = async (req, res) => {
 
         const filter = { isActive: true, ...departmentQuery(resolveDepartment(req)) };
 
-        // Role-based filtering - restricted roles see only their own
-        if (!canViewAllInDepartment(req.user.role)) {
+        // Role-based filtering:
+        //  - sub-user: locked to their linked salesperson's entries only
+        //  - other restricted roles: only their own
+        //  - full-access roles: all (optionally filtered by ?salesPerson)
+        if (isBusinessSub(req)) {
+            filter.salesPerson = req.user.linkedSalesPerson || null;
+        } else if (!canViewAllInDepartment(req.user.role)) {
             filter.salesPerson = req.user.id;
         } else if (salesPerson) {
             filter.salesPerson = salesPerson;
@@ -174,9 +209,13 @@ exports.getBusiness = async (req, res) => {
             });
         }
 
-        // Access check for restricted roles (only own entries)
+        // Access check for restricted roles (only own entries; sub-user only
+        // its linked salesperson's entries)
+        const allowedOwnerId = isBusinessSub(req)
+            ? String(req.user.linkedSalesPerson || '')
+            : req.user.id;
         if (!canViewAllInDepartment(req.user.role) &&
-            business.salesPerson._id.toString() !== req.user.id) {
+            business.salesPerson._id.toString() !== allowedOwnerId) {
             return res.status(403).json({
                 success: false,
                 message: 'Access denied'
@@ -202,6 +241,14 @@ exports.getBusiness = async (req, res) => {
 // @access  Private
 exports.updateBusiness = async (req, res) => {
     try {
+        // Sub-users may only view and add — never edit
+        if (isBusinessSub(req)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Sub-users can only view and add business entries'
+            });
+        }
+
         const business = await Business.findById(req.params.id);
 
         if (!business) {
@@ -259,6 +306,14 @@ exports.updateBusiness = async (req, res) => {
 // @access  Private/Admin
 exports.deleteBusiness = async (req, res) => {
     try {
+        // Sub-users may only view and add — never delete
+        if (isBusinessSub(req)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Sub-users can only view and add business entries'
+            });
+        }
+
         const business = await Business.findById(req.params.id);
 
         if (!business) {

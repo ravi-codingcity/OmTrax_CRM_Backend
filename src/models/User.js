@@ -49,6 +49,14 @@ const userSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    // For sandboxed sub-accounts (role: business_sub): the salesperson this
+    // sub-user acts on behalf of. Business entries they add are owned by, and
+    // visible only for, this linked salesperson. Null/absent for normal users.
+    linkedSalesPerson: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
+    },
     isActive: {
         type: Boolean,
         default: true

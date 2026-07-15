@@ -16,8 +16,14 @@ const ROLES_BY_DEPARTMENT = {
 // even though they are no longer offered at signup.
 const LEGACY_ROLES = ['senior_recruiter', 'hr_executive', 'hr_manager', 'hr_head'];
 
+// Special-purpose restricted roles. Not offered at signup — created only via
+// admin scripts. `business_sub` is a temporary, sandboxed sub-account that can
+// ONLY view/add Business entries on behalf of a linked salesperson.
+// Removing this role (and its holders) has no effect on any other feature.
+const SUBUSER_ROLES = ['business_sub'];
+
 // All roles across departments (used for the User schema enum)
-const ALL_ROLES = [...new Set([...Object.values(ROLES_BY_DEPARTMENT).flat(), ...LEGACY_ROLES])];
+const ALL_ROLES = [...new Set([...Object.values(ROLES_BY_DEPARTMENT).flat(), ...LEGACY_ROLES, ...SUBUSER_ROLES])];
 
 // Roles that can view all entries within their department (vs. only their own).
 // All Purchase department roles manage the department's shared inventory data.
@@ -56,6 +62,7 @@ module.exports = {
     DEPARTMENTS,
     DEFAULT_DEPARTMENT,
     ROLES_BY_DEPARTMENT,
+    SUBUSER_ROLES,
     ALL_ROLES,
     FULL_ACCESS_ROLES,
     isValidDepartment,
