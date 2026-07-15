@@ -28,11 +28,18 @@
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
+const dns = require('dns');
+// Match the app's DB config: resolve MongoDB Atlas SRV records via Google DNS.
+dns.setServers(['8.8.8.8', '8.8.4.4']);
+dns.setDefaultResultOrder('ipv4first');
+
 const mongoose = require('mongoose');
 const User = require('../src/models/User');
 
 const CONFIG = {
-    email: (process.env.SUB_EMAIL || 'westsales@omtrax.com').toLowerCase(),
+    // NOTE: westsales@omtrax.com is Anchal's OWN email and must stay hers.
+    // The sub-user therefore needs its own distinct login email.
+    email: (process.env.SUB_EMAIL || 'westsales.subuser@omtrax.com').toLowerCase(),
     username: (process.env.SUB_USERNAME || 'westsales').toLowerCase(),
     password: process.env.SUB_PASSWORD || 'Welcome@123',
     name: 'West Sales (Anchal)',
@@ -80,7 +87,24 @@ async function create() {
     const primary = await findPrimarySalesperson();
     console.log(`Primary salesperson: ${primary.name} (@${primary.username}, id=${primary._id})`);
 
+    // Safety 1: never reuse the primary salesperson's own identity.
+    if (CONFIG.username === (primary.username || '').toLowerCase() ||
+        CONFIG.email === (primary.email || '').toLowerCase()) {
+        throw new Error(
+            `The sub-user's username/email must differ from the primary salesperson ` +
+            `(@${primary.username}, ${primary.email}). Set SUB_USERNAME / SUB_EMAIL to distinct values.`
+        );
+    }
+
+    // Safety 2: only ever modify an existing *sub-user*. If the username/email
+    // already belongs to any other (real) account, refuse to touch it.
     let sub = await User.findOne({ $or: [{ email: CONFIG.email }, { username: CONFIG.username }] });
+    if (sub && sub.role !== CONFIG.role) {
+        throw new Error(
+            `A real account already uses that username/email (@${sub.username}, ${sub.email}, ` +
+            `role "${sub.role}"). Refusing to modify it. Pick a different SUB_USERNAME / SUB_EMAIL.`
+        );
+    }
 
     if (sub) {
         // Idempotent: make sure existing account points at the right salesperson
