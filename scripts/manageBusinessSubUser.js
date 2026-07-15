@@ -10,7 +10,7 @@
  *   - Delete the sub-user (run this script with --delete) to fully retire it.
  *   - The `business_sub` role and `linkedSalesPerson` field are inert for every
  *     other account, so leaving the code in place changes nothing.
- *
+ * 
  * USAGE (run from the CRM_backend folder):
  *   node scripts/manageBusinessSubUser.js create      # create / re-link the sub-user
  *   node scripts/manageBusinessSubUser.js delete      # permanently remove it
