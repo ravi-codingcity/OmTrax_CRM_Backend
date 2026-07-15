@@ -20,6 +20,9 @@ router.route('/')
     .get(recruitmentController.getEntries)
     .post(createValidation, recruitmentController.createEntry);
 
+// Generate a requirement from an existing "HR & Recruitment" Sales Entry
+router.post('/from-sales/:salesEntryId', recruitmentController.createFromSales);
+
 router.put('/:id/reassign', recruitmentController.reassignEntry);
 
 router.route('/:id')

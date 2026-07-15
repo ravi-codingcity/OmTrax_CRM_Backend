@@ -21,6 +21,21 @@ const recruitmentSchema = new mongoose.Schema({
         required: [true, 'Position is required'],
         trim: true
     },
+    // The salesperson who originated this requirement from a Sales Entry.
+    // Grants them read-only visibility into its progress. Absent for
+    // requirements created manually inside the HR module.
+    salesPerson: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        index: true
+    },
+    // Back-link to the Sales Entry this requirement was generated from.
+    // Used to prevent creating duplicate requirements from the same lead.
+    sourceSalesEntry: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'SalesEntry',
+        index: true
+    },
     recruiter: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',

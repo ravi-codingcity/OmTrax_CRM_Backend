@@ -1,4 +1,5 @@
 const RecruitmentEntry = require('../models/RecruitmentEntry');
+const SalesEntry = require('../models/SalesEntry');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const { validationResult } = require('express-validator');
@@ -16,8 +17,12 @@ const canManage = (u) => isAdmin(u) || isTeamLeader(u); // can create / assign /
 const scopeForUser = (user) => {
     if (isAdmin(user)) return {};
     if (isTeamLeader(user)) return { assignedBy: user.id };
-    // Recruiter (or any other HR role): only their own assigned tasks
-    return { $or: [{ recruiter: user.id }, { recruiterName: user.name }] };
+    if (user.role === 'recruiter') {
+        return { $or: [{ recruiter: user.id }, { recruiterName: user.name }] };
+    }
+    // Salesperson (or any other role): only requirements they originated from
+    // their own Sales Entries — read-only visibility into progress.
+    return { salesPerson: user.id };
 };
 
 // Resolve a recruiter reference from an id and/or a name (fixed recruiter team).
@@ -98,6 +103,80 @@ exports.createEntry = async (req, res) => {
         res.status(201).json({ success: true, message: 'Requirement assigned successfully', data: populated });
     } catch (error) {
         console.error('Create recruitment entry error:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    }
+};
+
+// @desc    Create an HR requirement from an existing "HR & Recruitment" Sales Entry.
+//          Owner of the lead (or an Admin) can push it to HR Management. The
+//          requirement is created UNASSIGNED — a Team Leader assigns a recruiter
+//          later. Idempotent: repeat clicks return the existing requirement.
+// @route   POST /api/recruitment/from-sales/:salesEntryId
+// @access  Private (the sales entry's owner, or Admin)
+exports.createFromSales = async (req, res) => {
+    try {
+        const sales = await SalesEntry.findById(req.params.salesEntryId)
+            .populate('salesPerson', 'name');
+        if (!sales) {
+            return res.status(404).json({ success: false, message: 'Sales entry not found' });
+        }
+
+        // Only the lead's owner or an Admin may push it to HR
+        const ownerId = String(sales.salesPerson?._id || sales.salesPerson || '');
+        if (!isAdmin(req.user) && ownerId !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'You can only send your own leads to HR Management' });
+        }
+
+        // Guard: this action is only for HR & Recruitment leads
+        if ((sales.requirement || '').trim().toLowerCase() !== 'hr & recruitment') {
+            return res.status(400).json({ success: false, message: 'This lead is not an HR & Recruitment requirement' });
+        }
+
+        // Idempotent — avoid duplicate requirements from the same lead
+        const existing = await RecruitmentEntry.findOne({ sourceSalesEntry: sales._id, isActive: true })
+            .populate('recruiter', 'name username')
+            .populate('assignedBy', 'name username');
+        if (existing) {
+            return res.status(200).json({ success: true, duplicate: true, message: 'This lead is already in HR Management', data: existing });
+        }
+
+        const salesPersonName = sales.salesPerson?.name || req.user.name;
+        // Sales Entries have no dedicated "position" field; use the contact's
+        // designation if captured, otherwise a clear placeholder for HR to fill.
+        const position = (sales.designation || '').trim() || 'To be specified';
+
+        const entry = await RecruitmentEntry.create({
+            salesPersonName,
+            positionReceivedDate: new Date(), // auto-captured on creation
+            clientName: sales.companyName,
+            position,
+            salesPerson: sales.salesPerson?._id || sales.salesPerson,
+            sourceSalesEntry: sales._id,
+            assignedBy: req.user.id,
+            assignedByName: req.user.name,
+            department: 'hr',
+            entryDate: new Date(),
+            assignDate: new Date()
+        });
+
+        // Notify HR managers/team leaders that a new requirement needs assigning
+        try {
+            await Notification.create({
+                type: 'hr_assignment',
+                companyName: `${entry.position} @ ${entry.clientName}`,
+                salesPerson: req.user.id,
+                salesPersonName,
+                remark: 'New requirement from Sales — awaiting recruiter assignment',
+                forRole: 'team_leader',
+                department: 'hr'
+            });
+        } catch (err) {
+            console.error('HR from-sales notification failed:', err);
+        }
+
+        res.status(201).json({ success: true, message: 'Requirement sent to HR Management', data: entry });
+    } catch (error) {
+        console.error('Create recruitment from sales error:', error);
         res.status(500).json({ success: false, message: 'Server error', error: error.message });
     }
 };
@@ -219,7 +298,8 @@ exports.getEntry = async (req, res) => {
         if (!isAdmin(req.user)) {
             const ownsAsTL = isTeamLeader(req.user) && String(entry.assignedBy?._id || entry.assignedBy) === req.user.id;
             const ownsAsRecruiter = String(entry.recruiter?._id || entry.recruiter) === req.user.id || entry.recruiterName === req.user.name;
-            if (!ownsAsTL && !ownsAsRecruiter) {
+            const ownsAsSalesperson = String(entry.salesPerson?._id || entry.salesPerson || '') === req.user.id;
+            if (!ownsAsTL && !ownsAsRecruiter && !ownsAsSalesperson) {
                 return res.status(403).json({ success: false, message: 'Access denied' });
             }
         }
