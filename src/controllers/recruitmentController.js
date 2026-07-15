@@ -141,9 +141,12 @@ exports.createFromSales = async (req, res) => {
         }
 
         const salesPersonName = sales.salesPerson?.name || req.user.name;
-        // Sales Entries have no dedicated "position" field; use the contact's
-        // designation if captured, otherwise a clear placeholder for HR to fill.
-        const position = (sales.designation || '').trim() || 'To be specified';
+        // Position is entered manually by the salesperson on the create form.
+        // Fall back to the contact's designation, then a clear placeholder, so
+        // the required field is always satisfied even for background creates.
+        const position = (req.body.position || '').trim()
+            || (sales.designation || '').trim()
+            || 'To be specified';
 
         const entry = await RecruitmentEntry.create({
             salesPersonName,
