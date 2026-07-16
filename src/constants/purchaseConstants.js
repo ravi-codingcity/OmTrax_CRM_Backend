@@ -7,7 +7,7 @@ const UNITS = ['Piece', 'Box', 'Kg', 'Gram', 'Litre', 'Metre', 'Roll', 'Packet',
 // Predefined branches / warehouses used wherever a Storage Location is selected.
 // New locations added by users are saved to the DB master — no code change needed.
 const STORAGE_LOCATIONS = [
-    'Delhi - HO',
+    'Delhi HO',
     'Chennai',
     'Mumbai',
     'Jaipur',
