@@ -35,6 +35,9 @@ router.get('/follow-ups/overdue', salesController.getOverdueFollowUps);
 // Lead reassignment (Admin only) - must be before /:id routes
 router.post('/reassign-leads', authorize('admin'), salesController.reassignLeads);
 
+// Excel (CSV) export (Admin only) - must be before /:id routes
+router.get('/export', authorize('admin'), salesController.exportSalesEntries);
+
 // CRUD routes
 router.route('/')
     .get(salesController.getSalesEntries)

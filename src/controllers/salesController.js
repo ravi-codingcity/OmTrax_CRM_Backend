@@ -5,6 +5,89 @@ const User = require('../models/User');
 const DismissedReminder = require('../models/DismissedReminder');
 const { resolveDepartment, departmentQuery, canViewAllInDepartment } = require('../utils/department');
 
+// ---------------------------------------------------------------------------
+// Excel (CSV) export — Admin only. Generated server-side so the restriction is
+// enforced by the API itself, not just hidden in the UI.
+// ---------------------------------------------------------------------------
+
+const EXPORT_FILTERS = ['Total', 'Hot', 'Warm', 'Cold', 'Closed', 'Active'];
+
+const csvDate = (value) => {
+    if (!value) return '';
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return '';
+    return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
+};
+
+const csvCell = (value) => {
+    if (value === null || value === undefined) return '';
+    const s = String(value).replace(/"/g, '""');
+    return /[",\n\r]/.test(s) ? `"${s}"` : s;
+};
+
+const capitalize = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '');
+
+// @desc    Export sales entries as CSV, filtered by lead bucket
+// @route   GET /api/sales/export?filter=Total|Hot|Warm|Cold|Closed|Active
+// @access  Private/Admin
+exports.exportSalesEntries = async (req, res) => {
+    try {
+        const filterKey = (req.query.filter || 'Total').trim();
+        if (!EXPORT_FILTERS.includes(filterKey)) {
+            return res.status(400).json({
+                success: false,
+                message: `Invalid filter. Use one of: ${EXPORT_FILTERS.join(', ')}`
+            });
+        }
+
+        const query = { isActive: true, ...departmentQuery(resolveDepartment(req)) };
+        if (filterKey !== 'Total') {
+            // Stored casing varies, so match the status case-insensitively
+            query.queryStatus = new RegExp(`^${filterKey}$`, 'i');
+        }
+
+        const entries = await SalesEntry.find(query)
+            .populate('salesPerson', 'name')
+            .sort({ createdAt: -1 });
+
+        const headers = [
+            'S.No', 'Company Name', 'Contact Person', 'Designation', 'Contact Number',
+            'Email', 'Requirement', 'Location', 'Branch', 'Sales Person', 'Query Status',
+            'Remark', 'Next Follow-Up Date', 'Follow-Ups Count', 'Created Date'
+        ];
+
+        const rows = entries.map((e, idx) => [
+            idx + 1,
+            e.companyName,
+            e.contactPerson,
+            e.designation,
+            e.contactNumber,
+            e.contactEmail,
+            e.requirement,
+            e.location,
+            e.branch,
+            e.salesPerson?.name || '',
+            capitalize(e.queryStatus),
+            e.remark,
+            csvDate(e.nextFollowUpDate),
+            e.followUpHistory?.length || e.totalFollowUps || 0,
+            csvDate(e.createdAt)
+        ]);
+
+        const csv = [headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n');
+        const stamp = new Date().toISOString().split('T')[0];
+
+        // UTF-8 BOM so Excel renders unicode characters correctly
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="AllSales_${filterKey}_${stamp}.csv"`);
+        res.setHeader('X-Total-Records', String(entries.length));
+        res.status(200).send('﻿' + csv);
+    } catch (error) {
+        console.error('Export sales entries error:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    }
+};
+
 // @desc    Create new sales entry
 // @route   POST /api/sales
 // @access  Private
