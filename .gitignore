@@ -6,6 +6,9 @@ node_modules/
 .env.local
 .env.production
 
+# Database exports (contain user password hashes)
+export/
+
 # Logs
 logs/
 *.log

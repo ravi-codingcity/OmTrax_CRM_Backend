@@ -9,7 +9,6 @@ const followUpRoutes = require('./routes/followUpRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const branchRoutes = require('./routes/branchRoutes');
-const salesVisitRoutes = require('./routes/salesVisitRoutes');
 const businessRoutes = require('./routes/businessRoutes');
 const recruitmentRoutes = require('./routes/recruitmentRoutes');
 const purchaseRoutes = require('./routes/purchaseRoutes');
@@ -29,9 +28,10 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Body parser middleware - increased limit for base64 images
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// Body parser middleware. The old 50mb ceiling existed only for base64 image
+// uploads (Sales Visit); 1mb is ample for JSON payloads and limits abuse.
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // Request logging in development
 if (process.env.NODE_ENV === 'development') {
@@ -62,7 +62,6 @@ app.use('/api/follow-ups', followUpRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/branches', branchRoutes);
-app.use('/api/sales-visits', salesVisitRoutes);
 app.use('/api/business', businessRoutes);
 app.use('/api/recruitment', recruitmentRoutes);
 app.use('/api/purchase', purchaseRoutes);

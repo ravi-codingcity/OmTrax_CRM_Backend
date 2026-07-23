@@ -46,6 +46,16 @@ exports.signup = async (req, res) => {
             });
         }
 
+        // Never let self-service signup mint a full-access admin: whoever has
+        // the signup link would otherwise own the whole CRM. Set
+        // ALLOW_ADMIN_SIGNUP=true only for a deliberate, temporary exception.
+        if (finalRole === 'admin' && process.env.ALLOW_ADMIN_SIGNUP !== 'true') {
+            return res.status(403).json({
+                success: false,
+                message: 'Admin accounts cannot be self-registered. Please contact an existing administrator.'
+            });
+        }
+
         // Check if user already exists
         const existingUser = await User.findOne({
             $or: [{ username }, { email }]
