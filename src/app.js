@@ -25,7 +25,12 @@ app.use(cors({
     origin: true, // Allow all origins
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    // 'x-auth-access-key' is the URL-based auth header sent by the Sign Up /
+    // Reset Password pages — without it the browser's preflight for those
+    // requests fails with a CORS error.
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-auth-access-key'],
+    // Let the browser read the export row count from the download response
+    exposedHeaders: ['X-Total-Records']
 }));
 
 // Body parser middleware. The old 50mb ceiling existed only for base64 image
