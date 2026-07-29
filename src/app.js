@@ -20,17 +20,16 @@ const app = express();
 // MIDDLEWARE
 // ============================================
 
-// CORS - Allow all origins (simple configuration)
+// CORS — simple and permissive.
+// `origin: true` reflects whatever Origin made the request (required instead of
+// '*' because we send credentials). By NOT listing `methods` or `allowedHeaders`,
+// the cors package automatically mirrors back whatever the browser asks for in
+// its preflight — so every method and every header (including x-auth-access-key)
+// is allowed with no maintenance. This also handles OPTIONS preflight for us.
 app.use(cors({
-    origin: true, // Allow all origins
+    origin: true,
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    // 'x-auth-access-key' is the URL-based auth header sent by the Sign Up /
-    // Reset Password pages — without it the browser's preflight for those
-    // requests fails with a CORS error.
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-auth-access-key'],
-    // Let the browser read the export row count from the download response
-    exposedHeaders: ['X-Total-Records']
+    exposedHeaders: ['X-Total-Records'] // let the browser read the export row count
 }));
 
 // Body parser middleware. The old 50mb ceiling existed only for base64 image
