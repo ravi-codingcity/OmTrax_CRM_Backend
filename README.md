@@ -6,6 +6,7 @@ A robust Sales CRM Backend built with Node.js, Express.js, and MongoDB.
 
 - **Authentication System**: JWT-based login with role-based access control (accounts are provisioned by admins, not self-signup)
 - **User Management (Admin)**: Admin-only dashboard to create users, edit roles/departments, reset passwords, activate/deactivate, and delete accounts — with last-admin and self-delete protection
+- **Purchase Location Tracking**: Purchase Manager creates a material → the Warehouse/Branch Manager for that storage location is notified → they mark it **Received / Not Received** → received stock appears in *their* location's inventory only. Full lifecycle audit trail (Purchase → Received → Dispatch → Return) with notifications back to the Purchase Manager on every event. A location manager is linked to a storage location by setting their **`branch`** to the location's name.
 - **Sales Entry Management**: Complete CRUD operations for sales entries
 - **Follow-Up Tracking**: Track and manage follow-ups with history
 - **Notifications**: Real-time notification system for follow-ups and reminders

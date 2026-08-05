@@ -5,10 +5,43 @@
 // Net quantity currently out on jobs = dispatched − returned.
 const netDispatched = (entry) => (entry.totalDispatched || 0) - (entry.totalReturned || 0);
 
+// --- Location-based receipt / stock permissions ---------------------------
+
+const LOCATION_ROLES = ['warehouse_manager', 'branch_manager'];
+
+const isLocationManager = (user) => !!user && LOCATION_ROLES.includes(user.role);
+
+// A location manager is responsible for the storage location whose name matches
+// their `branch` (case-insensitive). This is how a location is "assigned".
+const matchesLocation = (user, locationName) => {
+    if (!user || !locationName) return false;
+    return (user.branch || '').trim().toLowerCase() === String(locationName).trim().toLowerCase();
+};
+
+// Who may mark a *pending* material received / not received:
+// the admin, or the location manager responsible for that storage location.
+const canReceive = (entry, user) => {
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    return isLocationManager(user) && matchesLocation(user, entry?.storageLocation);
+};
+
+// Who may record dispatches/returns: same as receive, but only *after* the
+// material has actually been received into that location.
+const canManageStock = (entry, user) => {
+    if (!user) return false;
+    if (entry?.receiptStatus !== 'received') return false;
+    return canReceive(entry, user);
+};
+
 // Validate a new dispatch:
+//  - the material must have been received first
 //  - cannot dispatch more than what is available in stock
 //  - a Job Number is mandatory (every dispatch must be traceable to a job)
 const validateDispatch = (entry, payload = {}) => {
+    if (entry.receiptStatus !== 'received') {
+        return { ok: false, message: 'Material must be marked Received before it can be dispatched' };
+    }
     const qty = Number(payload.quantity);
     if (!qty || qty <= 0) {
         return { ok: false, message: 'Dispatch quantity must be greater than 0' };
@@ -35,6 +68,9 @@ const canModifyEntry = (entry, user) => {
 
 // Validate a return. Cannot return more than what is currently out on jobs.
 const validateReturn = (entry, quantity) => {
+    if (entry.receiptStatus !== 'received') {
+        return { ok: false, message: 'Material must be marked Received before returns can be recorded' };
+    }
     const qty = Number(quantity);
     if (!qty || qty <= 0) {
         return { ok: false, message: 'Return quantity must be greater than 0' };
@@ -77,4 +113,7 @@ const buildInventorySummary = (entries) => {
         .sort((a, b) => b.totalPurchased - a.totalPurchased);
 };
 
-module.exports = { netDispatched, validateDispatch, validateReturn, canModifyEntry, buildInventorySummary };
+module.exports = {
+    netDispatched, validateDispatch, validateReturn, canModifyEntry, buildInventorySummary,
+    isLocationManager, matchesLocation, canReceive, canManageStock, LOCATION_ROLES
+};

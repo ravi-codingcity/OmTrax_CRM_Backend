@@ -2,11 +2,16 @@ const PurchaseEntry = require('../models/PurchaseEntry');
 const Item = require('../models/Item');
 const Supplier = require('../models/Supplier');
 const StorageLocation = require('../models/StorageLocation');
+const User = require('../models/User');
+const Notification = require('../models/Notification');
 const { validationResult } = require('express-validator');
 const { resolveDepartment, departmentQuery } = require('../utils/department');
-const { validateDispatch, validateReturn, canModifyEntry, buildInventorySummary } = require('../services/purchaseService');
+const {
+    validateDispatch, validateReturn, canModifyEntry, buildInventorySummary,
+    canReceive, canManageStock, isLocationManager, LOCATION_ROLES
+} = require('../services/purchaseService');
 
-// 403 helper — only the record's creator (or a CRM Admin) may modify it.
+// 403 helper — only the record's creator (or a CRM Admin) may edit procurement details.
 const denyIfNotOwner = (entry, req, res) => {
     if (canModifyEntry(entry, req.user)) return false;
     res.status(403).json({
@@ -17,6 +22,54 @@ const denyIfNotOwner = (entry, req, res) => {
 };
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// A short label for a material used in notifications: "Item @ Location"
+const materialLabel = (entry) =>
+    `${entry.itemName || 'Material'}${entry.storageLocation ? ` @ ${entry.storageLocation}` : ''}`;
+
+// Append one line to the material's audit trail.
+const logActivity = (entry, action, req, extra = {}) => {
+    entry.activity = entry.activity || [];
+    entry.activity.push({
+        action,
+        at: new Date(),
+        byUser: req.user.id,
+        byName: req.user.name,
+        byRole: req.user.role,
+        ...extra
+    });
+};
+
+// Fire-and-forget notification helper (never breaks the main request).
+const notify = async (payload) => {
+    try {
+        await Notification.create({ department: 'purchase', ...payload });
+    } catch (err) {
+        console.error('Purchase notification failed:', err.message);
+    }
+};
+
+// The location manager(s) responsible for a storage location = active
+// warehouse/branch managers in the purchase department whose branch matches.
+const findLocationManagers = async (locationName) => {
+    if (!locationName || !locationName.trim()) return [];
+    return User.find({
+        department: 'purchase',
+        isActive: true,
+        role: { $in: LOCATION_ROLES },
+        branch: new RegExp(`^${escapeRegex(locationName.trim())}$`, 'i')
+    }).select('_id name role');
+};
+
+// Location-based visibility: warehouse/branch managers see only entries for
+// their own location; purchase managers and admins see everything in the dept.
+const locationScopeFilter = (req) => {
+    if (isLocationManager(req.user)) {
+        const branch = (req.user.branch || '__none__').trim();
+        return { storageLocation: new RegExp(`^${escapeRegex(branch)}$`, 'i') };
+    }
+    return {};
+};
 
 // Ensure the item exists in the master catalogue (so it shows in autocomplete).
 const ensureItem = async (name, unit, department, user) => {
@@ -92,7 +145,7 @@ exports.createEntry = async (req, res) => {
         const price = Number(unitPrice) || 0;
         const amount = totalAmount !== undefined && totalAmount !== '' ? Number(totalAmount) : qty * price;
 
-        const entry = await PurchaseEntry.create({
+        const entry = new PurchaseEntry({
             itemName,
             storageLocation,
             supplier,
@@ -104,16 +157,32 @@ exports.createEntry = async (req, res) => {
             invoiceNumber,
             remarks,
             department,
+            receiptStatus: 'pending',
             createdBy: req.user.id,
             createdByName: req.user.name,
             createdByUsername: req.user.username,
             createdByBranch: req.user.branch
         });
+        logActivity(entry, 'purchased', req, { quantity: qty, note: `Purchased ${qty} ${unit || ''}`.trim() });
+        await entry.save();
 
         // Keep the item, supplier & storage-location masters up to date for autocomplete
         await ensureItem(itemName, unit, department, req.user);
         await ensureSupplier(supplier, department, req.user);
         await ensureStorageLocation(storageLocation, department, req.user);
+
+        // Notify the location manager(s) responsible for this storage location
+        const managers = await findLocationManagers(storageLocation);
+        await Promise.all(managers.map((m) => notify({
+            type: 'purchase_receipt_request',
+            purchaseEntry: entry._id,
+            companyName: materialLabel(entry),
+            remark: `Qty ${qty} ${unit || ''}`.trim(),
+            salesPerson: req.user.id,
+            salesPersonName: req.user.name,
+            forUser: m._id,
+            forRole: m.role
+        })));
 
         res.status(201).json({ success: true, message: 'Purchase entry created successfully', data: entry });
     } catch (error) {
@@ -128,8 +197,9 @@ exports.createEntry = async (req, res) => {
 exports.getEntries = async (req, res) => {
     try {
         const { search, storageLocation, page = 1, limit = 1000 } = req.query;
-        const filter = { isActive: true, ...departmentQuery(resolveDepartment(req)) };
-        if (storageLocation) filter.storageLocation = storageLocation;
+        // Location managers are confined to their own location; PM/admin see all.
+        const filter = { isActive: true, ...departmentQuery(resolveDepartment(req)), ...locationScopeFilter(req) };
+        if (storageLocation && !isLocationManager(req.user)) filter.storageLocation = storageLocation;
         if (search) {
             filter.$or = [
                 { itemName: { $regex: search, $options: 'i' } },
@@ -167,8 +237,17 @@ exports.getEntries = async (req, res) => {
 // @access  Private (purchase / admin)
 exports.getEntry = async (req, res) => {
     try {
-        const entry = await PurchaseEntry.findById(req.params.id).populate('createdBy', 'name username branch');
+        const entry = await PurchaseEntry.findById(req.params.id)
+            .populate('createdBy', 'name username branch')
+            .populate('receivedBy', 'name username');
         if (!entry) return res.status(404).json({ success: false, message: 'Purchase entry not found' });
+
+        // Location managers may only view their own location's records
+        if (isLocationManager(req.user) &&
+            (req.user.branch || '').trim().toLowerCase() !== (entry.storageLocation || '').trim().toLowerCase()) {
+            return res.status(403).json({ success: false, message: 'Access denied for this location' });
+        }
+
         res.status(200).json({ success: true, data: entry });
     } catch (error) {
         console.error('Get purchase entry error:', error);
@@ -218,28 +297,105 @@ exports.deleteEntry = async (req, res) => {
     }
 };
 
+// 403 helper for stock actions — the location manager (or admin) who owns the
+// storage location may act, and only after the material has been received.
+const denyIfCannotManageStock = (entry, req, res) => {
+    if (canManageStock(entry, req.user)) return false;
+    const msg = entry.receiptStatus !== 'received'
+        ? 'Material must be marked Received first'
+        : 'Only the location manager for this storage location can do this';
+    res.status(403).json({ success: false, message: msg });
+    return true;
+};
+
+// Notify the purchase manager who created the material about a lifecycle event.
+const notifyCreator = (entry, type, req, remark) => {
+    if (!entry.createdBy) return Promise.resolve();
+    return notify({
+        type,
+        purchaseEntry: entry._id,
+        companyName: materialLabel(entry),
+        remark,
+        salesPerson: req.user.id,
+        salesPersonName: req.user.name,
+        forUser: entry.createdBy._id || entry.createdBy
+    });
+};
+
+// @desc    Mark a pending material as Received / Not Received (location manager)
+// @route   POST /api/purchase/entries/:id/receive
+// @access  Private (location manager for the storage location, or admin)
+exports.receiveEntry = async (req, res) => {
+    try {
+        const entry = await PurchaseEntry.findById(req.params.id);
+        if (!entry) return res.status(404).json({ success: false, message: 'Purchase entry not found' });
+
+        if (!canReceive(entry, req.user)) {
+            return res.status(403).json({ success: false, message: 'Only the location manager for this storage location can confirm receipt' });
+        }
+        if (entry.receiptStatus !== 'pending') {
+            return res.status(400).json({ success: false, message: `This material has already been marked "${entry.receiptStatus.replace('_', ' ')}"` });
+        }
+
+        const status = req.body.status === 'not_received' ? 'not_received' : 'received';
+        const note = (req.body.note || '').trim();
+
+        entry.receiptStatus = status;
+        entry.receivedBy = req.user.id;
+        entry.receivedByName = req.user.name;
+        entry.receivedAt = new Date();
+        entry.receiptNote = note;
+        logActivity(entry, status, req, { note: note || (status === 'received' ? 'Marked received' : 'Marked not received') });
+        await entry.save();
+
+        await notifyCreator(
+            entry,
+            status === 'received' ? 'purchase_received' : 'purchase_not_received',
+            req,
+            `${status === 'received' ? 'Received' : 'Not received'} by ${req.user.name}${note ? ` — ${note}` : ''}`
+        );
+
+        const populated = await PurchaseEntry.findById(entry._id)
+            .populate('createdBy', 'name username branch')
+            .populate('receivedBy', 'name username');
+        res.status(200).json({ success: true, message: `Material marked ${status.replace('_', ' ')}`, data: populated });
+    } catch (error) {
+        console.error('Receive entry error:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    }
+};
+
 // @desc    Record a dispatch against a purchase entry
 // @route   POST /api/purchase/entries/:id/dispatch
-// @access  Private (purchase / admin)
+// @access  Private (location manager for the storage location, or admin)
 exports.addDispatch = async (req, res) => {
     try {
         const entry = await PurchaseEntry.findById(req.params.id);
         if (!entry) return res.status(404).json({ success: false, message: 'Purchase entry not found' });
 
-        if (denyIfNotOwner(entry, req, res)) return;
+        if (denyIfCannotManageStock(entry, req, res)) return;
 
         const check = validateDispatch(entry, req.body);
         if (!check.ok) return res.status(400).json({ success: false, message: check.message });
 
+        const location = (req.body.location || '').trim();
+        if (!location) return res.status(400).json({ success: false, message: 'Location is required' });
+
+        const qty = Number(req.body.quantity);
+        const jobNumber = String(req.body.jobNumber).trim();
         entry.dispatches.push({
             dispatchDate: req.body.dispatchDate || new Date(),
-            quantity: Number(req.body.quantity),
-            jobNumber: String(req.body.jobNumber).trim(),
+            quantity: qty,
+            jobNumber,
+            location,
             remark: req.body.remark,
             createdBy: req.user.id,
             createdByName: req.user.name
         });
+        logActivity(entry, 'dispatch', req, { quantity: qty, jobNumber, note: `To ${location}${req.body.remark ? ` — ${req.body.remark}` : ''}` });
         await entry.save();
+
+        await notifyCreator(entry, 'purchase_dispatch', req, `Dispatched ${qty} to ${location} (Job #${jobNumber}) by ${req.user.name}`);
 
         res.status(200).json({ success: true, message: 'Dispatch recorded successfully', data: entry });
     } catch (error) {
@@ -250,24 +406,32 @@ exports.addDispatch = async (req, res) => {
 
 // @desc    Record a return against a purchase entry
 // @route   POST /api/purchase/entries/:id/return
-// @access  Private (purchase / admin)
+// @access  Private (location manager for the storage location, or admin)
 exports.addReturn = async (req, res) => {
     try {
         const entry = await PurchaseEntry.findById(req.params.id);
         if (!entry) return res.status(404).json({ success: false, message: 'Purchase entry not found' });
 
-        if (denyIfNotOwner(entry, req, res)) return;
+        if (denyIfCannotManageStock(entry, req, res)) return;
 
         const check = validateReturn(entry, req.body.quantity);
         if (!check.ok) return res.status(400).json({ success: false, message: check.message });
 
+        const location = (req.body.location || '').trim();
+        if (!location) return res.status(400).json({ success: false, message: 'Location is required' });
+
+        const qty = Number(req.body.quantity);
         entry.returns.push({
             returnDate: req.body.returnDate || new Date(),
-            quantity: Number(req.body.quantity),
+            quantity: qty,
+            location,
             createdBy: req.user.id,
             createdByName: req.user.name
         });
+        logActivity(entry, 'return', req, { quantity: qty, note: `Returned ${qty} to ${location}` });
         await entry.save();
+
+        await notifyCreator(entry, 'purchase_return', req, `Returned ${qty} to ${location} by ${req.user.name}`);
 
         res.status(200).json({ success: true, message: 'Return recorded successfully', data: entry });
     } catch (error) {
@@ -281,8 +445,13 @@ exports.addReturn = async (req, res) => {
 // @access  Private (purchase / admin)
 exports.getInventory = async (req, res) => {
     try {
-        const entries = await PurchaseEntry.find({ isActive: true, ...departmentQuery(resolveDepartment(req)) })
-            .select('itemName storageLocation unit quantityPurchased totalDispatched totalReturned availableStock');
+        // Only received materials count as inventory, scoped to the caller's location.
+        const entries = await PurchaseEntry.find({
+            isActive: true,
+            receiptStatus: 'received',
+            ...departmentQuery(resolveDepartment(req)),
+            ...locationScopeFilter(req)
+        }).select('itemName storageLocation unit quantityPurchased totalDispatched totalReturned availableStock');
         res.status(200).json({ success: true, data: buildInventorySummary(entries) });
     } catch (error) {
         console.error('Get inventory error:', error);
@@ -295,11 +464,14 @@ exports.getInventory = async (req, res) => {
 // @access  Private (purchase / admin)
 exports.getStats = async (req, res) => {
     try {
-        const entries = await PurchaseEntry.find({ isActive: true, ...departmentQuery(resolveDepartment(req)) })
+        const scoped = { isActive: true, ...departmentQuery(resolveDepartment(req)), ...locationScopeFilter(req) };
+        // Stock figures come from received materials only.
+        const receivedEntries = await PurchaseEntry.find({ ...scoped, receiptStatus: 'received' })
             .select('itemName storageLocation unit quantityPurchased totalDispatched totalReturned availableStock totalAmount');
+        const pendingReceipts = await PurchaseEntry.countDocuments({ ...scoped, receiptStatus: 'pending' });
 
-        const inventory = buildInventorySummary(entries);
-        const totals = entries.reduce((acc, e) => {
+        const inventory = buildInventorySummary(receivedEntries);
+        const totals = receivedEntries.reduce((acc, e) => {
             acc.purchaseValue += e.totalAmount || 0;
             acc.purchasedQty += e.quantityPurchased || 0;
             acc.dispatchedQty += e.totalDispatched || 0;
@@ -314,8 +486,9 @@ exports.getStats = async (req, res) => {
         res.status(200).json({
             success: true,
             data: {
-                totalEntries: entries.length,
+                totalEntries: receivedEntries.length,
                 totalItems: inventory.length,
+                pendingReceipts,
                 ...totals,
                 lowStock,
                 outOfStock,

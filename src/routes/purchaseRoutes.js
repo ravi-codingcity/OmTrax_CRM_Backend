@@ -40,6 +40,7 @@ router.route('/entries')
     .post(entryValidation, purchaseController.createEntry);
 
 // Lifecycle actions (before /:id catch-all patterns)
+router.post('/entries/:id/receive', purchaseController.receiveEntry);
 router.post('/entries/:id/dispatch', purchaseController.addDispatch);
 router.post('/entries/:id/return', purchaseController.addReturn);
 

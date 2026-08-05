@@ -6,6 +6,7 @@ const dispatchSchema = new mongoose.Schema({
     dispatchDate: { type: Date, default: Date.now },
     quantity: { type: Number, required: true, min: 0 },
     jobNumber: { type: String, trim: true, required: [true, 'Job number is required'] },
+    location: { type: String, trim: true }, // destination / movement location
     remark: { type: String, trim: true }, // optional dispatch note
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     createdByName: { type: String, trim: true }
@@ -15,9 +16,27 @@ const dispatchSchema = new mongoose.Schema({
 const returnSchema = new mongoose.Schema({
     returnDate: { type: Date, default: Date.now },
     quantity: { type: Number, required: true, min: 0 },
+    location: { type: String, trim: true }, // location the material is returned to/from
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     createdByName: { type: String, trim: true }
 }, { timestamps: true });
+
+// One line in the material's lifecycle audit trail
+// (Purchase → Received/Not Received → Dispatch → Return).
+const activitySchema = new mongoose.Schema({
+    action: {
+        type: String,
+        enum: ['purchased', 'received', 'not_received', 'dispatch', 'return', 'updated'],
+        required: true
+    },
+    at: { type: Date, default: Date.now },
+    byUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    byName: { type: String, trim: true },
+    byRole: { type: String, trim: true },
+    note: { type: String, trim: true },
+    quantity: { type: Number },
+    jobNumber: { type: String, trim: true }
+}, { _id: false });
 
 const purchaseEntrySchema = new mongoose.Schema({
     // Procurement details
@@ -34,9 +53,26 @@ const purchaseEntrySchema = new mongoose.Schema({
     invoiceNumber: { type: String, trim: true },
     remarks: { type: String, trim: true },
 
+    // Location-based receipt workflow. A new purchase starts as "pending" and
+    // the Warehouse/Branch Manager assigned to storageLocation marks it
+    // received or not received. Stock only counts once received.
+    receiptStatus: {
+        type: String,
+        enum: ['pending', 'received', 'not_received'],
+        default: 'pending',
+        index: true
+    },
+    receivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    receivedByName: { type: String, trim: true },
+    receivedAt: { type: Date },
+    receiptNote: { type: String, trim: true },
+
     // Lifecycle records
     dispatches: [dispatchSchema],
     returns: [returnSchema],
+
+    // Full lifecycle audit trail (Purchase → Received → Dispatch → Return)
+    activity: [activitySchema],
 
     // Auto-maintained inventory totals (recomputed on every save)
     totalDispatched: { type: Number, default: 0 },
