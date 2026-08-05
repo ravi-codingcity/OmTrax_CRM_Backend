@@ -15,92 +15,26 @@ const generateToken = (userId) => {
     return jwt.sign({ id: userId }, jwtSecret, { expiresIn: jwtExpire });
 };
 
-// @desc    Register a new user
-// @route   POST /api/auth/signup
-// @access  Public
-exports.signup = async (req, res) => {
-    try {
-        // Check for validation errors
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({
-                success: false,
-                errors: errors.array()
-            });
-        }
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-        const { username, password, name, email, role, branch, phoneNumber } = req.body;
+// True when the given user is the only active admin left — used to stop an
+// admin from locking everyone out by demoting/deactivating/deleting themselves.
+const isLastActiveAdmin = async (userId) => {
+    const otherAdmins = await User.countDocuments({
+        role: 'admin',
+        isActive: true,
+        _id: { $ne: userId }
+    });
+    return otherAdmins === 0;
+};
 
-        // Resolve & validate department
-        const department = isValidDepartment(req.body.department)
-            ? req.body.department
-            : DEFAULT_DEPARTMENT;
-
-        // Validate that the chosen role is allowed for the chosen department
-        const allowedRoles = ROLES_BY_DEPARTMENT[department] || [];
-        const finalRole = role || (department === DEFAULT_DEPARTMENT ? 'salesperson' : 'recruiter');
-        if (!allowedRoles.includes(finalRole)) {
-            return res.status(400).json({
-                success: false,
-                message: `Role '${finalRole}' is not valid for the ${department} department`
-            });
-        }
-
-        // Never let self-service signup mint a full-access admin: whoever has
-        // the signup link would otherwise own the whole CRM. Set
-        // ALLOW_ADMIN_SIGNUP=true only for a deliberate, temporary exception.
-        if (finalRole === 'admin' && process.env.ALLOW_ADMIN_SIGNUP !== 'true') {
-            return res.status(403).json({
-                success: false,
-                message: 'Admin accounts cannot be self-registered. Please contact an existing administrator.'
-            });
-        }
-
-        // Check if user already exists
-        const existingUser = await User.findOne({
-            $or: [{ username }, { email }]
-        });
-
-        if (existingUser) {
-            return res.status(400).json({
-                success: false,
-                message: existingUser.username === username
-                    ? 'Username already exists'
-                    : 'Email already exists'
-            });
-        }
-
-        // Create new user
-        const user = await User.create({
-            username,
-            password,
-            name,
-            email,
-            role: finalRole,
-            department,
-            branch,
-            phoneNumber
-        });
-
-        // Generate token
-        const token = generateToken(user._id);
-
-        res.status(201).json({
-            success: true,
-            message: 'User registered successfully',
-            data: {
-                user,
-                token
-            }
-        });
-    } catch (error) {
-        console.error('Signup error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error during registration',
-            error: error.message
-        });
-    }
+// Validate that a role is allowed. Admin is shared across departments; every
+// other role must belong to the chosen department. business_sub is created only
+// via the admin script, never through this UI.
+const isRoleAllowedForDept = (role, department) => {
+    if (role === 'admin') return true;
+    if (role === 'business_sub') return false;
+    return (ROLES_BY_DEPARTMENT[department] || []).includes(role);
 };
 
 // @desc    Login user
@@ -233,96 +167,28 @@ exports.updatePassword = async (req, res) => {
     }
 };
 
-// @desc    Reset password (public - requires username and old password)
-// @route   POST /api/auth/reset-password
-// @access  Public
-exports.resetPassword = async (req, res) => {
-    try {
-        // Check for validation errors
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({
-                success: false,
-                errors: errors.array()
-            });
-        }
-
-        const { username, oldPassword, newPassword } = req.body;
-
-        // Validate required fields
-        if (!username || !oldPassword || !newPassword) {
-            return res.status(400).json({
-                success: false,
-                message: 'Please provide username, old password, and new password'
-            });
-        }
-
-        // Validate new password length
-        if (newPassword.length < 5) {
-            return res.status(400).json({
-                success: false,
-                message: 'New password must be at least 5 characters'
-            });
-        }
-
-        // Find user by username
-        const user = await User.findOne({ username: username.toLowerCase() }).select('+password');
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
-
-        // Check if user is active
-        if (!user.isActive) {
-            return res.status(401).json({
-                success: false,
-                message: 'Account is deactivated. Please contact admin.'
-            });
-        }
-
-        // Verify old password
-        const isMatch = await user.comparePassword(oldPassword);
-
-        if (!isMatch) {
-            return res.status(401).json({
-                success: false,
-                message: 'Old password is incorrect'
-            });
-        }
-
-        // Update password
-        user.password = newPassword;
-        await user.save();
-
-        res.status(200).json({
-            success: true,
-            message: 'Password reset successfully'
-        });
-    } catch (error) {
-        console.error('Reset password error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error during password reset',
-            error: error.message
-        });
-    }
-};
-
 // @desc    Get all users (Admin only)
 // @route   GET /api/auth/users
 // @access  Private/Admin
 exports.getAllUsers = async (req, res) => {
     try {
-        const { role, branch, isActive } = req.query;
+        const { role, department, branch, isActive, search, scope } = req.query;
 
-        // Build filter object — scoped to the active department
-        const filter = { ...departmentQuery(resolveDepartment(req)) };
+        // Admin User-Management view passes scope=all to see every department.
+        // Otherwise stay scoped to the active department (existing behaviour used
+        // by e.g. Assign Leads).
+        const filter = scope === 'all'
+            ? {}
+            : { ...departmentQuery(resolveDepartment(req)) };
+
+        if (department) filter.department = department;
         if (role) filter.role = role;
         if (branch) filter.branch = branch;
         if (isActive !== undefined) filter.isActive = isActive === 'true';
+        if (search && search.trim()) {
+            const rx = new RegExp(escapeRegex(search.trim()), 'i');
+            filter.$or = [{ name: rx }, { username: rx }, { email: rx }];
+        }
 
         const users = await User.find(filter).sort({ createdAt: -1 });
 
@@ -346,20 +212,44 @@ exports.getAllUsers = async (req, res) => {
 // @access  Private/Admin
 exports.updateUser = async (req, res) => {
     try {
-        const { name, email, role, branch, phoneNumber, isActive } = req.body;
-
-        const user = await User.findByIdAndUpdate(
-            req.params.id,
-            { name, email, role, branch, phoneNumber, isActive },
-            { new: true, runValidators: true }
-        );
-
+        const user = await User.findById(req.params.id);
         if (!user) {
-            return res.status(404).json({
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        const { name, email, role, department, branch, phoneNumber, isActive } = req.body;
+
+        // Resolve the department a new role would live in (for validation)
+        const targetDept = (department !== undefined && isValidDepartment(department))
+            ? department
+            : user.department;
+
+        if (role !== undefined && !isRoleAllowedForDept(role, targetDept)) {
+            return res.status(400).json({
                 success: false,
-                message: 'User not found'
+                message: `Role '${role}' is not valid for the ${targetDept} department`
             });
         }
+
+        // Safety: don't let the last active admin be demoted or deactivated
+        const demotingLastAdmin = user.role === 'admin' &&
+            ((role !== undefined && role !== 'admin') || isActive === false);
+        if (demotingLastAdmin && await isLastActiveAdmin(user._id)) {
+            return res.status(400).json({
+                success: false,
+                message: 'This is the last active admin — change another user to admin first.'
+            });
+        }
+
+        if (name !== undefined) user.name = name;
+        if (email !== undefined) user.email = email;
+        if (department !== undefined && isValidDepartment(department)) user.department = department;
+        if (role !== undefined) user.role = role;
+        if (branch !== undefined) user.branch = branch;
+        if (phoneNumber !== undefined) user.phoneNumber = phoneNumber;
+        if (isActive !== undefined) user.isActive = isActive;
+
+        await user.save();
 
         res.status(200).json({
             success: true,
@@ -367,11 +257,117 @@ exports.updateUser = async (req, res) => {
             data: user
         });
     } catch (error) {
+        if (error.code === 11000) {
+            return res.status(400).json({ success: false, message: 'That email or username is already in use.' });
+        }
         console.error('Update user error:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
             error: error.message
         });
+    }
+};
+
+// @desc    Create a user (Admin User Management — no access key, no auto-login)
+// @route   POST /api/auth/users
+// @access  Private/Admin
+exports.createUser = async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ success: false, errors: errors.array() });
+        }
+
+        const { username, password, name, email, role, branch, phoneNumber, isActive } = req.body;
+        const department = isValidDepartment(req.body.department) ? req.body.department : DEFAULT_DEPARTMENT;
+        const finalRole = role || (department === DEFAULT_DEPARTMENT ? 'salesperson' : 'recruiter');
+
+        if (!isRoleAllowedForDept(finalRole, department)) {
+            return res.status(400).json({
+                success: false,
+                message: `Role '${finalRole}' is not valid for the ${department} department`
+            });
+        }
+
+        const existingUser = await User.findOne({ $or: [{ username }, { email }] });
+        if (existingUser) {
+            return res.status(400).json({
+                success: false,
+                message: existingUser.username === username ? 'Username already exists' : 'Email already exists'
+            });
+        }
+
+        const user = await User.create({
+            username,
+            password,
+            name,
+            email,
+            role: finalRole,
+            department,
+            branch,
+            phoneNumber,
+            isActive: isActive !== undefined ? !!isActive : true
+        });
+
+        res.status(201).json({ success: true, message: 'User created successfully', data: user });
+    } catch (error) {
+        if (error.code === 11000) {
+            return res.status(400).json({ success: false, message: 'That email or username is already in use.' });
+        }
+        console.error('Create user error:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    }
+};
+
+// @desc    Reset a user's password (Admin — no old password required)
+// @route   PUT /api/auth/users/:id/password
+// @access  Private/Admin
+exports.adminResetPassword = async (req, res) => {
+    try {
+        const { newPassword } = req.body;
+        if (!newPassword || newPassword.length < 5) {
+            return res.status(400).json({ success: false, message: 'New password must be at least 5 characters' });
+        }
+
+        const user = await User.findById(req.params.id).select('+password');
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        user.password = newPassword; // hashed by the pre-save hook
+        await user.save();
+
+        res.status(200).json({ success: true, message: 'Password reset successfully' });
+    } catch (error) {
+        console.error('Admin reset password error:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    }
+};
+
+// @desc    Delete a user (Admin)
+// @route   DELETE /api/auth/users/:id
+// @access  Private/Admin
+exports.deleteUser = async (req, res) => {
+    try {
+        if (req.params.id === req.user.id) {
+            return res.status(400).json({ success: false, message: 'You cannot delete your own account.' });
+        }
+
+        const user = await User.findById(req.params.id);
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        if (user.role === 'admin' && await isLastActiveAdmin(user._id)) {
+            return res.status(400).json({ success: false, message: 'Cannot delete the last active admin.' });
+        }
+
+        await User.deleteOne({ _id: user._id });
+
+        res.status(200).json({ success: true, message: 'User deleted successfully' });
+    } catch (error) {
+        console.error('Delete user error:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
     }
 };

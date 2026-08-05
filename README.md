@@ -4,7 +4,8 @@ A robust Sales CRM Backend built with Node.js, Express.js, and MongoDB.
 
 ## 🚀 Features
 
-- **Authentication System**: JWT-based signup/login with role-based access control
+- **Authentication System**: JWT-based login with role-based access control (accounts are provisioned by admins, not self-signup)
+- **User Management (Admin)**: Admin-only dashboard to create users, edit roles/departments, reset passwords, activate/deactivate, and delete accounts — with last-admin and self-delete protection
 - **Sales Entry Management**: Complete CRUD operations for sales entries
 - **Follow-Up Tracking**: Track and manage follow-ups with history
 - **Notifications**: Real-time notification system for follow-ups and reminders
@@ -111,12 +112,31 @@ http://localhost:5000/api
 
 | Method | Endpoint | Description | Access |
 |--------|----------|-------------|--------|
-| POST | `/auth/signup` | Register new user | Public |
-| POST | `/auth/login` | User login | Public |
+| POST | `/auth/login` | User login (rate-limited) | Public |
 | GET | `/auth/me` | Get current user | Private |
-| PUT | `/auth/update-password` | Update password | Private |
-| GET | `/auth/users` | Get all users | Admin |
-| PUT | `/auth/users/:id` | Update user | Admin |
+| PUT | `/auth/update-password` | Update own password (logged-in) | Private |
+
+> There is **no public signup or self-service reset** flow. Accounts are created
+> and passwords reset by admins through the User Management endpoints below.
+
+### User Management Endpoints (Admin only)
+
+All routes are gated by `protect` + `authorize('admin')`, so no non-admin can
+reach them even by calling the API directly.
+
+| Method | Endpoint | Description | Access |
+|--------|----------|-------------|--------|
+| GET | `/auth/users` | List users. Query: `scope=all` (all departments), `search`, `role`, `department`, `branch`, `isActive` | Admin |
+| POST | `/auth/users` | Create a user (no access key, no auto-login) | Admin |
+| PUT | `/auth/users/:id` | Update name/email/role/department/branch/phone/status | Admin |
+| PUT | `/auth/users/:id/password` | Reset a user's password (no old password needed) | Admin |
+| DELETE | `/auth/users/:id` | Delete a user | Admin |
+
+**Safety rules enforced by the controller:**
+- Admins cannot delete their own account.
+- The **last active admin** cannot be demoted, deactivated, or deleted (prevents lockout).
+- Roles are validated against the chosen department (admin is cross-department).
+- The `business_sub` sandbox role is not creatable here (it is script-managed).
 
 ### Sales Entry Endpoints
 
@@ -179,14 +199,15 @@ Authorization: Bearer <your_jwt_token>
 
 ## 📝 Request Examples
 
-### Signup
+### Create a user (Admin)
 ```json
-POST /api/auth/signup
+POST /api/auth/users        (requires an admin JWT — Authorization: Bearer <token>)
 {
   "username": "john_doe",
   "password": "password123",
   "name": "John Doe",
   "email": "john@example.com",
+  "department": "relocation",
   "role": "salesperson",
   "branch": "Main Office",
   "phoneNumber": "1234567890"
