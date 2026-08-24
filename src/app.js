@@ -12,6 +12,14 @@ const branchRoutes = require('./routes/branchRoutes');
 const businessRoutes = require('./routes/businessRoutes');
 const recruitmentRoutes = require('./routes/recruitmentRoutes');
 const purchaseRoutes = require('./routes/purchaseRoutes');
+const vendorRoutes = require('./routes/vendorRoutes');
+const purchaseOrderRoutes = require('./routes/purchaseOrderRoutes');
+const kycRoutes = require('./routes/kycRoutes');
+const rateComparisonRoutes = require('./routes/rateComparisonRoutes');
+
+// Load the Cloudinary service early so its "not configured" warning appears at
+// boot rather than on the first KYC upload attempt.
+require('./services/cloudinaryService');
 
 // Initialize express app
 const app = express();
@@ -69,6 +77,13 @@ app.use('/api/branches', branchRoutes);
 app.use('/api/business', businessRoutes);
 app.use('/api/recruitment', recruitmentRoutes);
 app.use('/api/purchase', purchaseRoutes);
+app.use('/api/vendors', vendorRoutes);
+app.use('/api/purchase-orders', purchaseOrderRoutes);
+app.use('/api/rate-comparisons', rateComparisonRoutes);
+
+// PUBLIC — the vendor KYC form has no CRM login. Authorisation is the one-time
+// token in the URL. Mounted last among the API routes so nothing shadows it.
+app.use('/api/kyc', kycRoutes);
 
 // ============================================
 // ERROR HANDLING

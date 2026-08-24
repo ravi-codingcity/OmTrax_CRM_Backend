@@ -1,0 +1,12 @@
+{
+  "seededAt": "2026-08-20T05:41:25.870Z",
+  "database": "omtraxcrm",
+  "markers": {
+    "users": "email ends with @omtrax.dev",
+    "salesEntries": "companyName starts with [TEST]",
+    "business": "jobNumber starts with TEST-JOB-",
+    "recruitment": "clientName starts with [TEST]",
+    "purchase": "invoiceNumber starts with TEST-INV-"
+  },
+  "undo": "node scripts/seedTestData.js --undo --force"
+}

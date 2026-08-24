@@ -18,7 +18,7 @@ router.delete('/clear-read', notificationController.clearReadNotifications);
 router.delete('/:id', notificationController.deleteNotification);
 
 // Admin routes
-router.post('/', authorize('admin'), notificationController.createNotification);
-router.post('/generate-overdue', authorize('admin'), notificationController.generateOverdueNotifications);
+router.post('/', authorize('admin', 'director'), notificationController.createNotification);
+router.post('/generate-overdue', authorize('admin', 'director'), notificationController.generateOverdueNotifications);
 
 module.exports = router;

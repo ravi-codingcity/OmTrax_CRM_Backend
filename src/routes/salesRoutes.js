@@ -33,10 +33,10 @@ router.get('/follow-ups/today', salesController.getTodayFollowUps);
 router.get('/follow-ups/overdue', salesController.getOverdueFollowUps);
 
 // Lead reassignment (Admin only) - must be before /:id routes
-router.post('/reassign-leads', authorize('admin'), salesController.reassignLeads);
+router.post('/reassign-leads', authorize('admin', 'director'), salesController.reassignLeads);
 
 // Excel (CSV) export (Admin only) - must be before /:id routes
-router.get('/export', authorize('admin'), salesController.exportSalesEntries);
+router.get('/export', authorize('admin', 'director'), salesController.exportSalesEntries);
 
 // CRUD routes
 router.route('/')
@@ -46,6 +46,6 @@ router.route('/')
 router.route('/:id')
     .get(salesController.getSalesEntry)
     .put(salesController.updateSalesEntry)
-    .delete(authorize('admin', 'manager'), salesController.deleteSalesEntry);
+    .delete(authorize('admin', 'director', 'manager'), salesController.deleteSalesEntry);
 
 module.exports = router;

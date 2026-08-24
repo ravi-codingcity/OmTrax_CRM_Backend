@@ -6,6 +6,8 @@ const {
     DEFAULT_DEPARTMENT,
     isValidDepartment,
     ROLES_BY_DEPARTMENT,
+    CROSS_DEPARTMENT_ROLES,
+    ADMIN_LEVEL_ROLES,
     resolveDepartment,
     departmentQuery,
 } = require('../utils/department');
@@ -17,11 +19,13 @@ const generateToken = (userId) => {
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// True when the given user is the only active admin left — used to stop an
+// True when the given user is the only administrator left — used to stop an
 // admin from locking everyone out by demoting/deactivating/deleting themselves.
+// Director counts here because it carries the same CRM authority as Admin, so
+// an organisation with an active Director is not locked out.
 const isLastActiveAdmin = async (userId) => {
     const otherAdmins = await User.countDocuments({
-        role: 'admin',
+        role: { $in: ADMIN_LEVEL_ROLES },
         isActive: true,
         _id: { $ne: userId }
     });
@@ -32,7 +36,8 @@ const isLastActiveAdmin = async (userId) => {
 // other role must belong to the chosen department. business_sub is created only
 // via the admin script, never through this UI.
 const isRoleAllowedForDept = (role, department) => {
-    if (role === 'admin') return true;
+    // Admin and Director are cross-department — valid whichever department is picked
+    if (CROSS_DEPARTMENT_ROLES.includes(role)) return true;
     if (role === 'business_sub') return false;
     return (ROLES_BY_DEPARTMENT[department] || []).includes(role);
 };
@@ -172,16 +177,24 @@ exports.updatePassword = async (req, res) => {
 // @access  Private/Admin
 exports.getAllUsers = async (req, res) => {
     try {
-        const { role, department, branch, isActive, search, scope } = req.query;
+        const { role, branch, isActive, search, scope } = req.query;
 
-        // Admin User-Management view passes scope=all to see every department.
-        // Otherwise stay scoped to the active department (existing behaviour used
-        // by e.g. Assign Leads).
+        // `req.query.department` is deliberately NOT read as a filter here.
+        //
+        // The client's Axios interceptor appends department=<activeDepartment>
+        // to every request as ambient context. Using it as a filter as well
+        // silently defeated scope=all: the Users page returned only the
+        // department currently being browsed. Ambient context is the job of
+        // resolveDepartment(); an explicit filter gets its own parameter.
+        const explicitDepartment = req.query.filterDepartment;
+
+        // The Users page passes scope=all to see every department. Everything
+        // else (e.g. Assign Leads) stays scoped to the active department.
         const filter = scope === 'all'
             ? {}
             : { ...departmentQuery(resolveDepartment(req)) };
 
-        if (department) filter.department = department;
+        if (explicitDepartment) filter.department = explicitDepartment;
         if (role) filter.role = role;
         if (branch) filter.branch = branch;
         if (isActive !== undefined) filter.isActive = isActive === 'true';
@@ -232,12 +245,12 @@ exports.updateUser = async (req, res) => {
         }
 
         // Safety: don't let the last active admin be demoted or deactivated
-        const demotingLastAdmin = user.role === 'admin' &&
-            ((role !== undefined && role !== 'admin') || isActive === false);
+        const demotingLastAdmin = ADMIN_LEVEL_ROLES.includes(user.role) &&
+            ((role !== undefined && !ADMIN_LEVEL_ROLES.includes(role)) || isActive === false);
         if (demotingLastAdmin && await isLastActiveAdmin(user._id)) {
             return res.status(400).json({
                 success: false,
-                message: 'This is the last active admin — change another user to admin first.'
+                message: 'This is the last active administrator — make another user an Admin or Director first.'
             });
         }
 
@@ -359,8 +372,8 @@ exports.deleteUser = async (req, res) => {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
-        if (user.role === 'admin' && await isLastActiveAdmin(user._id)) {
-            return res.status(400).json({ success: false, message: 'Cannot delete the last active admin.' });
+        if (ADMIN_LEVEL_ROLES.includes(user.role) && await isLastActiveAdmin(user._id)) {
+            return res.status(400).json({ success: false, message: 'Cannot delete the last active administrator.' });
         }
 
         await User.deleteOne({ _id: user._id });

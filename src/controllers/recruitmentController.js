@@ -3,13 +3,15 @@ const SalesEntry = require('../models/SalesEntry');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const { validationResult } = require('express-validator');
+const { isAdminLevel } = require('../utils/department');
 
 // Fields the assigned recruiter owns
 const RECRUITER_FIELDS = ['cvSubmissionDate', 'cvsSubmitted', 'feedback', 'remarks'];
 // Fields set when assigning a requirement (Admin / Team Leader)
 const ASSIGNMENT_FIELDS = ['salesPersonName', 'positionReceivedDate', 'clientName', 'position'];
 
-const isAdmin = (u) => u.role === 'admin';
+// Admin-level = Admin or Director; both carry full CRM authority.
+const isAdmin = (u) => isAdminLevel(u);
 const isTeamLeader = (u) => u.role === 'team_leader';
 const canManage = (u) => isAdmin(u) || isTeamLeader(u); // can create / assign / reassign
 

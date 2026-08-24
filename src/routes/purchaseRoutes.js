@@ -47,6 +47,6 @@ router.post('/entries/:id/return', purchaseController.addReturn);
 router.route('/entries/:id')
     .get(purchaseController.getEntry)
     .put(purchaseController.updateEntry)
-    .delete(authorize('admin'), purchaseController.deleteEntry);
+    .delete(authorize('admin', 'director'), purchaseController.deleteEntry);
 
 module.exports = router;

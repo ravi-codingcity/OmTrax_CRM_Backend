@@ -28,6 +28,6 @@ router.put('/:id/reassign', recruitmentController.reassignEntry);
 router.route('/:id')
     .get(recruitmentController.getEntry)
     .put(recruitmentController.updateEntry)
-    .delete(authorize('admin'), recruitmentController.deleteEntry);
+    .delete(authorize('admin', 'director'), recruitmentController.deleteEntry);
 
 module.exports = router;

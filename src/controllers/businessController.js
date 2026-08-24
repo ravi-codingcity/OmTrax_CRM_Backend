@@ -2,7 +2,7 @@ const Business = require('../models/Business');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 const { validationResult } = require('express-validator');
-const { resolveDepartment, departmentQuery, canViewAllInDepartment } = require('../utils/department');
+const { resolveDepartment, departmentQuery, canViewAllInDepartment, isAdminLevel } = require('../utils/department');
 
 // A "business_sub" is a sandboxed temporary account that acts entirely on behalf
 // of a single linked salesperson: everything it creates is owned by that
@@ -70,7 +70,7 @@ exports.createBusiness = async (req, res) => {
 
         const salesPersonId = linkedOwner
             ? linkedOwner.id
-            : (req.user.role === 'admin' && req.body.salesPerson
+            : (isAdminLevel(req.user) && req.body.salesPerson
                 ? req.body.salesPerson
                 : req.user.id);
 

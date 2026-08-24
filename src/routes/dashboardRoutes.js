@@ -14,7 +14,7 @@ router.get('/activities', dashboardController.getRecentActivities);
 // Admin/Manager routes
 router.get(
     '/salesperson-performance',
-    authorize('admin', 'manager'),
+    authorize('admin', 'director', 'manager'),
     dashboardController.getSalespersonPerformance
 );
 

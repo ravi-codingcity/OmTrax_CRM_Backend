@@ -17,6 +17,6 @@ router.route('/')
 router.route('/:id')
     .get(followUpController.getFollowUp)
     .put(followUpController.updateFollowUp)
-    .delete(authorize('admin'), followUpController.deleteFollowUp);
+    .delete(authorize('admin', 'director'), followUpController.deleteFollowUp);
 
 module.exports = router;

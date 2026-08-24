@@ -1,3 +1,5 @@
+const { isAdminLevel } = require('../utils/department');
+
 // Purchase domain services: inventory math and business-rule validation.
 // Keeping this logic here (rather than in controllers) makes it reusable and
 // easy to unit test as the module grows.
@@ -22,7 +24,7 @@ const matchesLocation = (user, locationName) => {
 // the admin, or the location manager responsible for that storage location.
 const canReceive = (entry, user) => {
     if (!user) return false;
-    if (user.role === 'admin') return true;
+    if (isAdminLevel(user)) return true;
     return isLocationManager(user) && matchesLocation(user, entry?.storageLocation);
 };
 
@@ -61,7 +63,7 @@ const validateDispatch = (entry, payload = {}) => {
 //    (everyone can still *view* all records across every location)
 const canModifyEntry = (entry, user) => {
     if (!user) return false;
-    if (user.role === 'admin') return true;
+    if (isAdminLevel(user)) return true;
     const owner = entry?.createdBy ? String(entry.createdBy._id || entry.createdBy) : '';
     return !!owner && owner === String(user.id);
 };

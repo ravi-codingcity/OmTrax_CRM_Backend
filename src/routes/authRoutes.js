@@ -52,7 +52,7 @@ router.get('/me', protect, authController.getMe);
 router.put('/update-password', protect, authController.updatePassword);
 
 // Admin routes — User Management (admin only, enforced here + in controller)
-router.use('/users', protect, authorize('admin'));
+router.use('/users', protect, authorize('admin', 'director'));
 router.route('/users')
     .get(authController.getAllUsers)
     .post(signupValidation, authController.createUser);

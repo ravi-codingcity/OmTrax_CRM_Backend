@@ -3,6 +3,17 @@ const SalesEntry = require('../models/SalesEntry');
 const DismissedReminder = require('../models/DismissedReminder');
 const { resolveDepartment, departmentQuery, canViewAllInDepartment } = require('../utils/department');
 
+// The Director section has no notifications of its own — everything it acts on
+// (rate comparisons, purchase orders) is raised against the purchase
+// department. Browsing as "director" therefore also surfaces those.
+const notificationDepartmentFilter = (req) => {
+    const dept = resolveDepartment(req);
+    if (dept === 'director') {
+        return { department: { $in: ['director', 'purchase'] } };
+    }
+    return departmentQuery(dept);
+};
+
 // @desc    Get notifications for current user
 // @route   GET /api/notifications
 // @access  Private
@@ -13,7 +24,7 @@ exports.getNotifications = async (req, res) => {
         // Build filter - get notifications for user or for their role or for all,
         // scoped to the active department
         const filter = {
-            ...departmentQuery(resolveDepartment(req)),
+            ...notificationDepartmentFilter(req),
             $or: [
                 { forUser: req.user.id },
                 { forRole: req.user.role },
@@ -70,7 +81,7 @@ exports.getNotifications = async (req, res) => {
 exports.getUnreadCount = async (req, res) => {
     try {
         const filter = {
-            ...departmentQuery(resolveDepartment(req)),
+            ...notificationDepartmentFilter(req),
             $or: [
                 { forUser: req.user.id },
                 { forRole: req.user.role },
@@ -386,7 +397,7 @@ exports.markAsRead = async (req, res) => {
 exports.markAllAsRead = async (req, res) => {
     try {
         const filter = {
-            ...departmentQuery(resolveDepartment(req)),
+            ...notificationDepartmentFilter(req),
             $or: [
                 { forUser: req.user.id },
                 { forRole: req.user.role },

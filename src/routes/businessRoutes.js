@@ -32,6 +32,6 @@ router.route('/')
 router.route('/:id')
     .get(businessController.getBusiness)
     .put(businessController.updateBusiness)
-    .delete(authorize('admin'), businessController.deleteBusiness);
+    .delete(authorize('admin', 'director'), businessController.deleteBusiness);
 
 module.exports = router;

@@ -26,8 +26,8 @@ router.get('/', branchController.getBranches);
 router.get('/:id', branchController.getBranch);
 
 // Admin routes
-router.post('/', authorize('admin'), branchValidation, branchController.createBranch);
-router.put('/:id', authorize('admin'), branchController.updateBranch);
-router.delete('/:id', authorize('admin'), branchController.deleteBranch);
+router.post('/', authorize('admin', 'director'), branchValidation, branchController.createBranch);
+router.put('/:id', authorize('admin', 'director'), branchController.updateBranch);
+router.delete('/:id', authorize('admin', 'director'), branchController.deleteBranch);
 
 module.exports = router;

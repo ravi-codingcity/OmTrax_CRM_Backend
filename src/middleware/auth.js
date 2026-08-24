@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const { isAdminLevel } = require('../utils/department');
 const User = require('../models/User');
 const { jwtSecret } = require('../config/constants');
 
@@ -101,7 +102,8 @@ exports.allowDepartment = (department) => {
         if (!req.user) {
             return res.status(401).json({ success: false, message: 'Not authorized' });
         }
-        if (req.user.role === 'admin' || req.user.department === department) {
+        // Administrators (Admin and Director) reach every department
+        if (isAdminLevel(req.user) || req.user.department === department) {
             return next();
         }
         return res.status(403).json({
