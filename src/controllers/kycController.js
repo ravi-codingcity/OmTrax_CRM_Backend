@@ -92,9 +92,14 @@ exports.getKycForm = async (req, res) => {
                 serviceOptions: OTHER_SERVICES,
                 urpValue: URP_VALUE,
                 expiresAt: vendor.kycTokenExpiresAt,
-                // Everything the form needs to render itself and validate locally
-                documents: KYC_DOCUMENTS.map(({ field, label, required, requiresGst }) => ({
-                    field, label, required, requiresGst: !!requiresGst,
+                // Everything the form needs to render itself and validate locally.
+                // The form REPLACES its built-in list with this one, so every
+                // conditional flag has to travel — a flag omitted here is a rule
+                // the vendor's browser cannot apply.
+                documents: KYC_DOCUMENTS.map(({ field, label, required, requiresGst, optionalWhenUrp }) => ({
+                    field, label, required,
+                    requiresGst: !!requiresGst,
+                    optionalWhenUrp: !!optionalWhenUrp,
                 })),
                 limits: {
                     maxFileMB: MAX_FILE_MB,

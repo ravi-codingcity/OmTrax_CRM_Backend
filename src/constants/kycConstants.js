@@ -46,7 +46,10 @@ const KYC_DOCUMENTS = [
     // enters URP is not GST registered, so there is no certificate to give.
     { field: 'gstCertificate', docType: 'gst_certificate', label: 'GST Certificate', required: true, requiresGst: true },
     { field: 'cancelledCheque', docType: 'cancelled_cheque', label: 'Cancelled Cheque', required: true },
-    { field: 'companyRegistration', docType: 'company_registration', label: 'Company Registration Document', required: true },
+    // An unregistered proprietorship has nothing to register, so this stops
+    // being mandatory for a URP vendor. Unlike the GST certificate the slot is
+    // still offered — a URP vendor with a registration document may upload it.
+    { field: 'companyRegistration', docType: 'company_registration', label: 'Company Registration Document', required: true, optionalWhenUrp: true },
     { field: 'aadhaarCard', docType: 'aadhaar_card', label: 'Aadhaar Card', required: false },
     { field: 'msmeCertificate', docType: 'msme_certificate', label: 'MSME Certificate', required: false },
     { field: 'agreementUpload', docType: 'agreement', label: 'Agreement', required: false },
@@ -54,11 +57,17 @@ const KYC_DOCUMENTS = [
 
 /**
  * Which documents a submission must carry, given what was entered for GST.
- * `URP` means unregistered, so the GST certificate drops out of the list.
+ *
+ * `URP` means the vendor is not registered, so two documents drop out of the
+ * required list: the GST certificate (`requiresGst`, which the form hides
+ * outright) and the company registration document (`optionalWhenUrp`, which
+ * the form keeps on offer but no longer insists on).
  */
 const requiredDocumentsFor = (gstValue) => {
     const unregistered = isUrp(gstValue);
-    return KYC_DOCUMENTS.filter((d) => d.required && !(d.requiresGst && unregistered));
+    return KYC_DOCUMENTS.filter(
+        (d) => d.required && !((d.requiresGst || d.optionalWhenUrp) && unregistered)
+    );
 };
 
 const DOC_FIELD_TO_TYPE = KYC_DOCUMENTS.reduce((acc, d) => {
