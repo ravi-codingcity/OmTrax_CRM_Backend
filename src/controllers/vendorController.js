@@ -4,8 +4,9 @@ const User = require('../models/User');
 const { validationResult } = require('express-validator');
 const {
     canViewVendors, canEditVendors, canGenerateKycLink, canReviewKyc,
-    isFinanceUser, isPurchaseUser, isAdminLevel,
-    PURCHASE_ROLES, FINANCE_ROLES,
+    isFinanceUser, isPurchaseUser, isAdminLevel, isOperationsUser,
+    PURCHASE_ROLES, FINANCE_ROLES, OPERATIONS_ROLES,
+    isValidKycType, DEFAULT_KYC_TYPE, kycTypesForUser, canAccessKycType,
 } = require('../utils/department');
 
 const { withSignedDocuments } = require('../services/kycService');
@@ -53,9 +54,38 @@ const denyUnlessCanEdit = (req, res) => {
     return true;
 };
 
-const denyUnlessCanGenerateLink = (req, res) => {
-    if (canGenerateKycLink(req.user)) return false;
-    res.status(403).json({ success: false, message: 'You are not allowed to generate KYC links' });
+/**
+ * Which KYC form this request is for. An explicit `kycType` wins; otherwise an
+ * Operations user gets the Operations form and everyone else Purchase — so
+ * existing callers that send nothing keep the Purchase behaviour they had.
+ */
+const requestedKycType = (req) => {
+    const asked = String(req.body?.kycType || req.query?.kycType || '').trim();
+    if (isValidKycType(asked)) return asked;
+    if (isOperationsUser(req.user)) return 'operations';
+    return DEFAULT_KYC_TYPE;
+};
+
+/**
+ * Stop a caller reaching a vendor whose KYC belongs to the other workflow.
+ * Finance and administrators pass for both. A record with no kycType predates
+ * Operations and counts as Purchase.
+ */
+const denyUnlessCanAccessKyc = (req, res, vendor) => {
+    if (canAccessKycType(req.user, vendor?.kycType || DEFAULT_KYC_TYPE)) return false;
+    res.status(403).json({
+        success: false,
+        message: 'This vendor belongs to a KYC workflow your department does not manage.',
+    });
+    return true;
+};
+
+const denyUnlessCanGenerateLink = (req, res, kycType = DEFAULT_KYC_TYPE) => {
+    if (canGenerateKycLink(req.user, kycType)) return false;
+    res.status(403).json({
+        success: false,
+        message: `You are not allowed to generate ${kycType === 'operations' ? 'Operations' : 'Purchase'} KYC links`,
+    });
     return true;
 };
 
@@ -119,7 +149,8 @@ exports.createVendor = async (req, res) => {
 // @access  Private (admin, director, purchase_manager, finance)
 exports.createKycRequest = async (req, res) => {
     try {
-        if (denyUnlessCanGenerateLink(req, res)) return;
+        const kycType = requestedKycType(req);
+        if (denyUnlessCanGenerateLink(req, res, kycType)) return;
 
         // Nothing is asked for up front. The button mints a link straight away and
         // the vendor supplies every detail — including their own name — through
@@ -152,7 +183,11 @@ exports.createKycRequest = async (req, res) => {
             }
         }
 
-        const source = isFinanceUser(req.user) ? 'finance' : 'purchase';
+        // Who asked for it, which is not the same as which form it opens —
+        // Finance generates both, and the form type is tracked separately.
+        const source = isFinanceUser(req.user)
+            ? 'finance'
+            : (isOperationsUser(req.user) ? 'operations' : 'purchase');
 
         if (!vendor) {
             // A shell record — the vendor supplies the rest through the form.
@@ -186,6 +221,7 @@ exports.createKycRequest = async (req, res) => {
         vendor.kycTokenExpiresAt = new Date(Date.now() + TOKEN_TTL_DAYS * 86400000);
         vendor.kycStatus = 'sent';
         vendor.kycLinkSentAt = new Date();
+        vendor.kycType = kycType;
         vendor.kycSource = source;
         vendor.kycSourceUser = req.user.id;
         vendor.kycSourceUserName = req.user.name;
@@ -195,16 +231,18 @@ exports.createKycRequest = async (req, res) => {
             vendor.logKyc('reset', req.user, { fromStatus: previous, toStatus: 'sent' });
         }
         vendor.logKyc('link_generated', req.user, {
-            fromStatus: previous, toStatus: 'sent', remarks: `Source: ${source}`,
+            fromStatus: previous, toStatus: 'sent',
+            remarks: `${kycType === 'operations' ? 'Operations' : 'Purchase'} KYC • Source: ${source}`,
         });
         await vendor.save();
 
         res.status(201).json({
             success: true,
-            message: 'KYC link generated. Share it with the vendor to collect their details.',
+            message: `${kycType === 'operations' ? 'Operations' : 'Purchase'} KYC link generated. Share it with the vendor to collect their details.`,
             data: {
                 kycLink: publicKycUrl(vendor.kycToken),
                 kycStatus: vendor.kycStatus,
+                kycType: vendor.kycType,
                 kycSource: vendor.kycSource,
                 expiresAt: vendor.kycTokenExpiresAt,
                 vendor: vendor.toSafeJSON(),
@@ -223,13 +261,27 @@ exports.getVendors = async (req, res) => {
     try {
         if (denyUnlessCanView(req, res)) return;
 
-        const { search, kycStatus, kycSource, page = 1, limit = 1000 } = req.query;
+        const { search, kycStatus, kycSource, kycType, page = 1, limit = 1000 } = req.query;
 
-        // Deliberately NOT department-scoped: Purchase and Finance work the same
-        // vendor records rather than keeping duplicates.
+        // Deliberately NOT department-scoped: Purchase, Operations and Finance
+        // work the same vendor records rather than keeping duplicates.
         const filter = { isActive: true };
         if (kycStatus) filter.kycStatus = kycStatus;
         if (kycSource) filter.kycSource = kycSource;
+
+        // Purchase staff see Purchase KYC, Operations staff see Operations KYC;
+        // Finance and administrators see both. Records predating Operations have
+        // no kycType, so they count as Purchase.
+        const allowedTypes = kycTypesForUser(req.user);
+        if (allowedTypes) {
+            filter.kycType = allowedTypes.includes('purchase')
+                ? { $in: [...allowedTypes, null] }
+                : { $in: allowedTypes };
+        }
+        // An explicit filter may only narrow within what the user may already see
+        if (isValidKycType(kycType) && canAccessKycType(req.user, kycType)) {
+            filter.kycType = kycType === 'purchase' ? { $in: ['purchase', null] } : kycType;
+        }
         if (search && search.trim()) {
             const rx = new RegExp(escapeRegex(search.trim()), 'i');
             filter.$or = [
@@ -322,6 +374,7 @@ exports.getVendor = async (req, res) => {
             .populate('kycHistory.byUser', 'name username');
 
         if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
+        if (denyUnlessCanAccessKyc(req, res, vendor)) return;
 
         // Documents come back with short-lived signed view/download URLs. The
         // permission check above is what authorises issuing them — a raw
@@ -389,10 +442,14 @@ exports.deleteVendor = async (req, res) => {
 // @access  Private (admin, purchase_manager, finance)
 exports.generateKycLink = async (req, res) => {
     try {
-        if (denyUnlessCanGenerateLink(req, res)) return;
-
         const vendor = await Vendor.findById(req.params.id);
         if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
+
+        // Regenerating keeps the vendor on the form they were already on unless
+        // the caller explicitly asks for the other one.
+        const asked = String(req.body?.kycType || '').trim();
+        const kycType = isValidKycType(asked) ? asked : (vendor.kycType || DEFAULT_KYC_TYPE);
+        if (denyUnlessCanGenerateLink(req, res, kycType)) return;
 
         // An approved vendor should not be silently re-opened for editing.
         // Regenerating is allowed, but it is an explicit act that resets status.
@@ -411,8 +468,11 @@ exports.generateKycLink = async (req, res) => {
         vendor.kycTokenExpiresAt = new Date(Date.now() + TOKEN_TTL_DAYS * 86400000);
         vendor.kycStatus = 'sent';
         vendor.kycLinkSentAt = new Date();
+        vendor.kycType = kycType;
         // Source = the department of whoever generated the link
-        vendor.kycSource = isFinanceUser(req.user) ? 'finance' : 'purchase';
+        vendor.kycSource = isFinanceUser(req.user)
+            ? 'finance'
+            : (isOperationsUser(req.user) ? 'operations' : 'purchase');
         vendor.kycSourceUser = req.user.id;
         vendor.kycSourceUserName = req.user.name;
 
@@ -423,16 +483,17 @@ exports.generateKycLink = async (req, res) => {
         }
         vendor.logKyc('link_generated', req.user, {
             fromStatus: previous, toStatus: 'sent',
-            remarks: `Source: ${vendor.kycSource}`,
+            remarks: `${kycType === 'operations' ? 'Operations' : 'Purchase'} KYC • Source: ${vendor.kycSource}`,
         });
         await vendor.save();
 
         res.status(200).json({
             success: true,
-            message: 'KYC link generated',
+            message: `${kycType === 'operations' ? 'Operations' : 'Purchase'} KYC link generated`,
             data: {
                 kycLink: publicKycUrl(vendor.kycToken),
                 kycStatus: vendor.kycStatus,
+                kycType: vendor.kycType,
                 kycSource: vendor.kycSource,
                 expiresAt: vendor.kycTokenExpiresAt,
                 vendor: vendor.toSafeJSON(),

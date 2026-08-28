@@ -28,16 +28,16 @@ const ALLOWED_MIME_TYPES = Object.keys(ALLOWED_TYPES);
 const ALLOWED_EXTENSIONS = [...new Set(Object.values(ALLOWED_TYPES).flatMap((t) => t.ext))];
 const ALLOWED_LABEL = 'JPG, JPEG, PDF, XLS or XLSX';
 
-// Maximum documents in one submission (7 slots + a little headroom)
-const MAX_FILES = 10;
+// Maximum documents in one submission (9 slots + a little headroom)
+const MAX_FILES = 12;
 
 // --- Document types --------------------------------------------------------
 
 /**
- * The five documents a vendor is asked for. `field` is the multipart field name
- * the frontend uses; `docType` is what gets persisted.
+ * The documents a vendor is asked for. `field` is the multipart field name the
+ * frontend uses; `docType` is what gets persisted.
  *
- * Legacy docTypes from the first release are kept in DOC_TYPE_ENUM so existing
+ * Legacy docTypes from earlier releases are kept in DOC_TYPE_ENUM so existing
  * records stay valid, even though they are no longer collected.
  */
 const KYC_DOCUMENTS = [
@@ -46,26 +46,38 @@ const KYC_DOCUMENTS = [
     // enters URP is not GST registered, so there is no certificate to give.
     { field: 'gstCertificate', docType: 'gst_certificate', label: 'GST Certificate', required: true, requiresGst: true },
     { field: 'cancelledCheque', docType: 'cancelled_cheque', label: 'Cancelled Cheque', required: true },
-    // An unregistered proprietorship has nothing to register, so this stops
-    // being mandatory for a URP vendor. Unlike the GST certificate the slot is
-    // still offered — a URP vendor with a registration document may upload it.
-    { field: 'companyRegistration', docType: 'company_registration', label: 'Company Registration Document', required: true, optionalWhenUrp: true },
+    { field: 'incorporationCertificate', docType: 'incorporation_certificate', label: 'Incorporation Certificate (CIN)', required: false },
     { field: 'aadhaarCard', docType: 'aadhaar_card', label: 'Aadhaar Card', required: false },
     { field: 'msmeCertificate', docType: 'msme_certificate', label: 'MSME Certificate', required: false },
+    { field: 'balanceSheet', docType: 'balance_sheet', label: 'Balance Sheet', required: false },
+    { field: 'profitLoss', docType: 'profit_loss', label: 'Profit & Loss (P&L) Statement', required: false },
     { field: 'agreementUpload', docType: 'agreement', label: 'Agreement', required: false },
 ];
 
+// `company_registration` is no longer collected on either form. Existing
+// records that carry one still resolve a label and stay schema-valid via
+// DOC_TYPE_LABELS / DOC_TYPE_ENUM below.
+
 /**
- * Which documents a submission must carry, given what was entered for GST.
+ * Both KYC forms currently ask for the same documents. The two workflows differ
+ * in their FIELDS, not their uploads (Purchase collects materials, Operations
+ * collects services and a vehicle count) — see KYC_FORM_CONFIG.
  *
- * `URP` means the vendor is not registered, so two documents drop out of the
- * required list: the GST certificate (`requiresGst`, which the form hides
- * outright) and the company registration document (`optionalWhenUrp`, which
- * the form keeps on offer but no longer insists on).
+ * Kept as a function so a future form can diverge without touching callers.
  */
-const requiredDocumentsFor = (gstValue) => {
+const documentsForType = () => KYC_DOCUMENTS;
+
+/**
+ * Which documents a submission must carry, given what was entered for GST and
+ * which form is being filled in.
+ *
+ * `URP` means the vendor is not registered, so the GST certificate
+ * (`requiresGst`) drops out of the required list — the form hides it outright.
+ * An `optionalWhenUrp` document would stay on offer but stop being mandatory.
+ */
+const requiredDocumentsFor = (gstValue, kycType) => {
     const unregistered = isUrp(gstValue);
-    return KYC_DOCUMENTS.filter(
+    return documentsForType(kycType).filter(
         (d) => d.required && !((d.requiresGst || d.optionalWhenUrp) && unregistered)
     );
 };
@@ -79,18 +91,21 @@ const DOC_TYPE_LABELS = KYC_DOCUMENTS.reduce((acc, d) => {
     acc[d.docType] = d.label;
     return acc;
 }, {
-    // Legacy labels — records created before this release may still use these
+    // Legacy labels — records created before this release may still use these.
+    // Anything also present in KYC_DOCUMENTS is overwritten by the loop above.
     bank_statement: 'Bank Statement',
     incorporation_certificate: 'Certificate of Incorporation',
     msme_certificate: 'MSME / Udyam Certificate',
+    // No longer collected on either form, but old submissions still carry one
+    company_registration: 'Company Registration Document',
     other: 'Other Document',
 });
 
 // Schema enum: current types plus every legacy value, so old rows stay valid.
-const DOC_TYPE_ENUM = [
+const DOC_TYPE_ENUM = [...new Set([
     ...KYC_DOCUMENTS.map((d) => d.docType),
-    'bank_statement', 'incorporation_certificate', 'other',
-];
+    'bank_statement', 'incorporation_certificate', 'company_registration', 'other',
+])];
 
 // --- KYC workflow ----------------------------------------------------------
 
@@ -133,6 +148,63 @@ const OTHER_SERVICES = [
     'Air & Sea Freight and Custom Clearance',
 ];
 
+// --- Service location ------------------------------------------------------
+
+// All 28 States and 8 Union Territories. Service Location is a dropdown, never
+// free text, so the value is always one of these.
+const INDIAN_STATES = [
+    'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh',
+    'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka',
+    'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram',
+    'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu',
+    'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal',
+    // Union Territories
+    'Andaman and Nicobar Islands', 'Chandigarh',
+    'Dadra and Nagar Haveli and Daman and Diu', 'Delhi', 'Jammu and Kashmir',
+    'Ladakh', 'Lakshadweep', 'Puducherry',
+];
+const isIndianState = (v) => INDIAN_STATES.includes(String(v ?? '').trim());
+
+// Employee-count bands offered for Company Size.
+const COMPANY_SIZES = ['1-10', '11-50', '51-200', '201-500', '501-1000', '1000+'];
+
+// How many other-state GST rows one vendor may submit. Generous, but bounded so
+// a crafted request cannot post thousands of entries.
+const MAX_OTHER_STATE_GST = 36;
+
+// --- Per-form configuration ------------------------------------------------
+
+/**
+ * What each KYC workflow collects. The two forms share every document and every
+ * statutory field; they differ only in what the vendor is asked to supply:
+ *
+ *   purchase   — Materials (from the Purchase item master). No Other Services.
+ *   operations — Other Services and a vehicle count. No Materials.
+ */
+const KYC_FORM_CONFIG = {
+    purchase: {
+        kycType: 'purchase',
+        label: 'Purchase Department KYC',
+        collectsMaterials: true,
+        collectsServices: false,
+        collectsVehicles: false,
+    },
+    operations: {
+        kycType: 'operations',
+        label: 'Operations Department KYC',
+        collectsMaterials: false,
+        collectsServices: true,
+        collectsVehicles: true,
+    },
+};
+
+const KYC_TYPES = Object.keys(KYC_FORM_CONFIG);
+const DEFAULT_KYC_TYPE = 'purchase';
+const isValidKycType = (t) => KYC_TYPES.includes(t);
+// Unknown/missing type falls back to Purchase, which is what every record
+// created before this release was.
+const formConfig = (kycType) => KYC_FORM_CONFIG[kycType] || KYC_FORM_CONFIG[DEFAULT_KYC_TYPE];
+
 const GST_RX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
 const PAN_RX = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
 const IFSC_RX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
@@ -143,6 +215,16 @@ module.exports = {
     URP_VALUE,
     isUrp,
     OTHER_SERVICES,
+    INDIAN_STATES,
+    isIndianState,
+    COMPANY_SIZES,
+    MAX_OTHER_STATE_GST,
+    KYC_FORM_CONFIG,
+    KYC_TYPES,
+    DEFAULT_KYC_TYPE,
+    isValidKycType,
+    formConfig,
+    documentsForType,
     requiredDocumentsFor,
     MAX_FILE_BYTES,
     MAX_FILE_MB,

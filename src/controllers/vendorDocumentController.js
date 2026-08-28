@@ -10,12 +10,23 @@
 
 const Vendor = require('../models/Vendor');
 const { signedUrlFor, isConfigured } = require('../services/cloudinaryService');
-const { canViewVendors } = require('../utils/department');
+const { canViewVendors, canAccessKycType, DEFAULT_KYC_TYPE } = require('../utils/department');
 const { DOC_TYPE_LABELS, SIGNED_URL_TTL_SECONDS } = require('../constants/kycConstants');
 
 const denyUnlessCanView = (req, res) => {
     if (canViewVendors(req.user)) return false;
     res.status(403).json({ success: false, message: 'You do not have access to vendor documents' });
+    return true;
+};
+
+// Documents follow the same workflow boundary as the vendor record itself:
+// Purchase staff cannot open an Operations submission's files, or vice versa.
+const denyUnlessCanAccessKyc = (req, res, vendor) => {
+    if (canAccessKycType(req.user, vendor?.kycType || DEFAULT_KYC_TYPE)) return false;
+    res.status(403).json({
+        success: false,
+        message: 'This vendor belongs to a KYC workflow your department does not manage.',
+    });
     return true;
 };
 
@@ -26,8 +37,9 @@ exports.listDocuments = async (req, res) => {
     try {
         if (denyUnlessCanView(req, res)) return;
 
-        const vendor = await Vendor.findById(req.params.id).select('vendorName kycDocuments kycStatus');
+        const vendor = await Vendor.findById(req.params.id).select('vendorName kycDocuments kycStatus kycType');
         if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
+        if (denyUnlessCanAccessKyc(req, res, vendor)) return;
 
         const documents = (vendor.kycDocuments || []).map((d) => ({
             _id: d._id,
@@ -66,8 +78,9 @@ exports.openDocument = async (req, res) => {
     try {
         if (denyUnlessCanView(req, res)) return;
 
-        const vendor = await Vendor.findById(req.params.id).select('kycDocuments');
+        const vendor = await Vendor.findById(req.params.id).select('kycDocuments kycType');
         if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
+        if (denyUnlessCanAccessKyc(req, res, vendor)) return;
 
         // id(...) scopes the lookup to THIS vendor, so a document id belonging to
         // another vendor cannot be fetched through this route.

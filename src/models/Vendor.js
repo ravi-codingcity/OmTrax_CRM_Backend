@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 const crypto = require('crypto');
-const { DOC_TYPE_ENUM, KYC_STATUSES: STATUS_LIST } = require('../constants/kycConstants');
+const {
+    DOC_TYPE_ENUM,
+    KYC_STATUSES: STATUS_LIST,
+    KYC_TYPES: KYC_TYPE_LIST,
+} = require('../constants/kycConstants');
 
 // Shared vendor register for the Purchase and Finance departments.
 //
@@ -41,6 +45,13 @@ const materialSchema = new mongoose.Schema({
     unit: { type: String, trim: true },
     estimatedRate: { type: Number, min: 0 },
     addedAt: { type: Date, default: Date.now }
+}, { _id: true });
+
+// One additional state registration: the state, and the GST number held there.
+// Only populated when the vendor says they are registered in other states.
+const otherStateGstSchema = new mongoose.Schema({
+    state: { type: String, required: true, trim: true },
+    gstNumber: { type: String, required: true, trim: true, uppercase: true },
 }, { _id: true });
 
 // One non-material service, chosen from the fixed OTHER_SERVICES list.
@@ -96,6 +107,17 @@ const vendorSchema = new mongoose.Schema({
     // --- Statutory (usually completed by the vendor via the KYC form) ---
     gstNumber: { type: String, trim: true, uppercase: true },
     panNumber: { type: String, trim: true, uppercase: true },
+    // A vendor registered in more than one state lists the others here. The
+    // primary registration stays in `gstNumber`; this array is only the extras.
+    otherStateGst: [otherStateGstSchema],
+    // All optional — a vendor may legitimately have none of these.
+    esiNumber: { type: String, trim: true },
+    pfNumber: { type: String, trim: true },
+    shopEstablishmentNumber: { type: String, trim: true },
+    iecCode: { type: String, trim: true, uppercase: true },
+    companySize: { type: String, trim: true },
+    // One of INDIAN_STATES — chosen from a dropdown, never free text
+    serviceLocation: { type: String, trim: true },
 
     // --- Banking (completed via the KYC form) ---
     bankName: { type: String, trim: true },
@@ -112,10 +134,19 @@ const vendorSchema = new mongoose.Schema({
         default: 'not_sent',
         index: true
     },
+    // WHICH FORM the vendor filled in. Distinct from kycSource below: Finance
+    // may generate either form, so the generating department does not identify
+    // the workflow. Records created before Operations existed are Purchase.
+    kycType: {
+        type: String,
+        enum: KYC_TYPE_LIST,
+        default: 'purchase',
+        index: true
+    },
     // Which department generated the KYC link the vendor used.
     kycSource: {
         type: String,
-        enum: ['purchase', 'finance', null],
+        enum: ['purchase', 'finance', 'operations', null],
         default: null
     },
     kycSourceUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -137,6 +168,9 @@ const vendorSchema = new mongoose.Schema({
     materials: [materialSchema],
     services: [serviceSchema],
 
+    // Operations KYC only — how many vehicles the vendor runs.
+    numberOfVehicles: { type: Number, min: 0 },
+
     // Anything the vendor typed that has no dedicated column
     kycAdditionalInfo: { type: String, trim: true },
 
@@ -153,10 +187,11 @@ const vendorSchema = new mongoose.Schema({
 
     // --- Ownership ---
     // Which department created the vendor. NOT used to restrict visibility —
-    // vendors are shared between Purchase and Finance by design.
+    // vendors are shared between Purchase, Operations and Finance by design.
+    // Visibility is decided by role and by kycType (see canAccessKycType).
     department: {
         type: String,
-        enum: ['purchase', 'finance'],
+        enum: ['purchase', 'finance', 'operations'],
         default: 'purchase',
         index: true
     },

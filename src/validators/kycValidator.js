@@ -12,6 +12,7 @@ const {
     ALLOWED_TYPES, ALLOWED_EXTENSIONS, ALLOWED_LABEL,
     DOC_FIELD_TO_TYPE, OTHER_SERVICES, URP_VALUE, isUrp, requiredDocumentsFor,
     GST_RX, PAN_RX, IFSC_RX, EMAIL_RX, PHONE_RX,
+    isIndianState, COMPANY_SIZES, MAX_OTHER_STATE_GST,
 } = require('../constants/kycConstants');
 
 const clean = (v) => String(v ?? '').trim();
@@ -51,7 +52,89 @@ const validateKycFields = (body = {}) => {
     const ifsc = clean(body.ifscCode).toUpperCase();
     if (ifsc && !IFSC_RX.test(ifsc)) problems.push('IFSC code format looks incorrect (e.g. HDFC0001234)');
 
+    // --- Optional statutory details -----------------------------------------
+    // ESI, PF, Shop Establishment and IEC are free-format across registrars, so
+    // only a sane length is enforced. Service Location and Company Size come
+    // from dropdowns, so an off-list value means a hand-crafted request.
+    const location = clean(body.serviceLocation);
+    if (location && !isIndianState(location)) {
+        problems.push('Select a Service Location from the list of Indian States and Union Territories');
+    }
+
+    const size = clean(body.companySize);
+    if (size && !COMPANY_SIZES.includes(size)) problems.push('Select a Company Size from the list');
+
+    const iec = clean(body.iecCode);
+    if (iec && !/^[A-Z0-9]{6,15}$/i.test(iec)) problems.push('IEC Code format looks incorrect');
+
+    [['esiNumber', 'ESI Number'], ['pfNumber', 'PF Number'],
+        ['shopEstablishmentNumber', 'Shop Establishment Number']].forEach(([f, label]) => {
+        if (clean(body[f]).length > 40) problems.push(`${label} is too long`);
+    });
+
+    // Operations only, but harmless to validate whenever it is supplied
+    const vehicles = clean(body.numberOfVehicles);
+    if (vehicles) {
+        const n = Number(vehicles);
+        if (!Number.isInteger(n) || n < 0) problems.push('Number of Vehicles must be a whole number');
+        else if (n > 100000) problems.push('Number of Vehicles looks too large');
+    }
+
     return problems;
+};
+
+/**
+ * Parse the "registered in other states too" list.
+ *
+ * Same transport as materials/services: a JSON string in multipart, or a real
+ * array from a JSON client. Each row must name a state and a valid GST number,
+ * and a state may only appear once.
+ *
+ * @returns {{ otherStateGst: Array, problems: string[] }}
+ */
+const parseOtherStateGst = (raw) => {
+    const problems = [];
+    let list = raw;
+
+    if (typeof raw === 'string') {
+        if (!raw.trim()) return { otherStateGst: [], problems };
+        try {
+            list = JSON.parse(raw);
+        } catch {
+            return { otherStateGst: [], problems: ['Other state GST list could not be read'] };
+        }
+    }
+
+    if (list == null) return { otherStateGst: [], problems };
+    if (!Array.isArray(list)) return { otherStateGst: [], problems: ['Other state GST list must be a list'] };
+    if (list.length > MAX_OTHER_STATE_GST) {
+        return { otherStateGst: [], problems: [`At most ${MAX_OTHER_STATE_GST} other state GST entries can be submitted`] };
+    }
+
+    const seen = new Set();
+    const rows = [];
+    list.forEach((row, i) => {
+        const at = `Other state GST #${i + 1}`;
+        const state = clean(row && (row.state ?? row.stateName));
+        const gst = clean(row && (row.gstNumber ?? row.gst)).toUpperCase();
+
+        // A wholly blank row is just an untouched input — skip it silently
+        if (!state && !gst) return;
+
+        if (!state) problems.push(`${at}: select a state`);
+        else if (!isIndianState(state)) problems.push(`${at}: "${state}" is not a recognised state`);
+        else if (seen.has(state)) problems.push(`${at}: ${state} is listed more than once`);
+
+        if (!gst) problems.push(`${at}: enter the GST number`);
+        else if (!GST_RX.test(gst)) problems.push(`${at}: "${gst}" is not a valid GST number`);
+
+        if (state && gst && isIndianState(state) && GST_RX.test(gst) && !seen.has(state)) {
+            seen.add(state);
+            rows.push({ state, gstNumber: gst });
+        }
+    });
+
+    return { otherStateGst: rows, problems };
 };
 
 /**
@@ -159,9 +242,9 @@ const parseServices = (raw) => {
  *
  * @returns {string[]} problems
  */
-const validateRequiredDocuments = (body, files = []) => {
+const validateRequiredDocuments = (body, files = [], kycType) => {
     const supplied = new Set(files.map((f) => f.fieldname));
-    return requiredDocumentsFor(body?.gstNumber)
+    return requiredDocumentsFor(body?.gstNumber, kycType)
         .filter((d) => !supplied.has(d.field))
         .map((d) => `${d.label} is required`);
 };
@@ -224,6 +307,6 @@ const validateFiles = (files = []) => {
 };
 
 module.exports = {
-    validateKycFields, parseMaterials, parseServices,
+    validateKycFields, parseMaterials, parseServices, parseOtherStateGst,
     validateRequiredDocuments, validateFile, validateFiles, clean,
 };

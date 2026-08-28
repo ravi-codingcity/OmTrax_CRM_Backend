@@ -8,10 +8,10 @@
 const Vendor = require('../models/Vendor');
 const { uploadBuffer, signedUrlFor, destroy, isConfigured, NOT_CONFIGURED_MSG } = require('./cloudinaryService');
 const {
-    validateKycFields, parseMaterials, parseServices,
+    validateKycFields, parseMaterials, parseServices, parseOtherStateGst,
     validateRequiredDocuments, validateFiles, clean,
 } = require('../validators/kycValidator');
-const { DOC_FIELD_TO_TYPE, DOC_TYPE_LABELS } = require('../constants/kycConstants');
+const { DOC_FIELD_TO_TYPE, DOC_TYPE_LABELS, formConfig } = require('../constants/kycConstants');
 
 /**
  * Look up the vendor behind a KYC token and decide whether the form is usable.
@@ -118,46 +118,71 @@ const VENDOR_WRITABLE = [
     'gstNumber', 'panNumber',
     'bankName', 'accountHolderName', 'accountNumber', 'ifscCode',
     'kycAdditionalInfo',
+    // Optional statutory details, collected on both forms
+    'esiNumber', 'pfNumber', 'shopEstablishmentNumber', 'iecCode',
+    'companySize', 'serviceLocation',
 ];
 
 /**
  * Validate a whole submission without touching the database.
- * @returns {{ problems: string[], materials: Array }}
+ *
+ * The two forms collect different things, so what counts as "tell us what you
+ * supply" differs: Purchase asks for materials, Operations for services. A list
+ * the form does not collect is ignored rather than rejected, so a stray field
+ * from an old client cannot block a submission.
+ *
+ * @returns {{ problems: string[], materials: Array, services: Array, otherStateGst: Array }}
  */
-const validateSubmission = (body, files) => {
+const validateSubmission = (body, files, kycType) => {
+    const config = formConfig(kycType);
+
     const problems = [
         ...validateKycFields(body),
         ...validateFiles(files),
         // Enforced here as well as in the browser, so a direct API call cannot
         // skip a mandatory document.
-        ...validateRequiredDocuments(body, files),
+        ...validateRequiredDocuments(body, files, config.kycType),
     ];
 
     const { materials, problems: materialProblems } = parseMaterials(body.materials);
     const { services, problems: serviceProblems } = parseServices(body.services);
+    const { otherStateGst, problems: gstProblems } = parseOtherStateGst(body.otherStateGst);
 
-    // A vendor must tell us at least one thing they supply
-    if (!materials.length && !services.length) {
-        problems.push('Select at least one material or service you provide');
+    // Only keep what this form actually collects
+    const keptMaterials = config.collectsMaterials ? materials : [];
+    const keptServices = config.collectsServices ? services : [];
+
+    if (config.collectsMaterials && config.collectsServices) {
+        if (!keptMaterials.length && !keptServices.length) {
+            problems.push('Select at least one material or service you provide');
+        }
+    } else if (config.collectsMaterials && !keptMaterials.length) {
+        problems.push('Select at least one material you supply');
+    } else if (config.collectsServices && !keptServices.length) {
+        problems.push('Select at least one service you provide');
     }
 
     return {
-        // parseMaterials complains when its own list is empty; that is only a
-        // problem if no services were chosen either, which is checked above.
+        // The parsers complain when their own list is empty; whether that is
+        // actually a problem depends on the form, and is decided above.
         problems: [
             ...problems,
-            ...materialProblems.filter((m) => !/at least one material/i.test(m)),
-            ...serviceProblems,
+            ...(config.collectsMaterials ? materialProblems.filter((m) => !/at least one material/i.test(m)) : []),
+            ...(config.collectsServices ? serviceProblems.filter((m) => !/at least one service/i.test(m)) : []),
+            ...gstProblems,
         ],
-        materials,
-        services,
+        materials: keptMaterials,
+        services: keptServices,
+        otherStateGst,
     };
 };
 
 /**
  * Apply a validated submission to the vendor document (does not save).
  */
-const applySubmission = (vendor, body, materials, uploadedDocs, services = []) => {
+const applySubmission = (vendor, body, materials, uploadedDocs, services = [], otherStateGst = []) => {
+    const config = formConfig(vendor.kycType);
+
     VENDOR_WRITABLE.forEach((f) => {
         if (body[f] !== undefined) vendor[f] = clean(body[f]);
     });
@@ -168,11 +193,19 @@ const applySubmission = (vendor, body, materials, uploadedDocs, services = []) =
     vendor.gstNumber = clean(body.gstNumber).toUpperCase();
     vendor.panNumber = clean(body.panNumber).toUpperCase();
     if (body.ifscCode) vendor.ifscCode = clean(body.ifscCode).toUpperCase();
+    if (body.iecCode) vendor.iecCode = clean(body.iecCode).toUpperCase();
     vendor.phone = clean(body.phone).replace(/\D/g, '');
 
-    // Replace both lists wholesale — the form is the source of truth
+    // Replace wholesale — the form is the source of truth
     vendor.materials = materials;
     vendor.services = services;
+    vendor.otherStateGst = otherStateGst;
+
+    // Operations only. Left untouched on a Purchase submission so a value
+    // recorded elsewhere is never silently cleared.
+    if (config.collectsVehicles && clean(body.numberOfVehicles)) {
+        vendor.numberOfVehicles = Number(clean(body.numberOfVehicles));
+    }
 
     if (uploadedDocs.length) vendor.kycDocuments.push(...uploadedDocs);
 

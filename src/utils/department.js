@@ -2,7 +2,7 @@
 // requires extending DEPARTMENTS / ROLES_BY_DEPARTMENT and (optionally) the
 // FULL_ACCESS_ROLES list — controllers do not need to change.
 
-const DEPARTMENTS = ['relocation', 'hr', 'purchase', 'finance', 'director'];
+const DEPARTMENTS = ['relocation', 'hr', 'purchase', 'finance', 'director', 'operations'];
 const DEFAULT_DEPARTMENT = 'relocation';
 
 // Roles allowed in each department (admin is shared across departments)
@@ -14,6 +14,7 @@ const ROLES_BY_DEPARTMENT = {
     // The Director section has no dedicated roles of its own — only the
     // cross-department Admin and Director roles may enter it.
     director: [],
+    operations: ['operations_manager', 'operations_executive'],
 };
 
 // Cross-department roles. These are not tied to one department — they may
@@ -51,16 +52,25 @@ const FULL_ACCESS_ROLES = [
     'admin', 'director', 'manager', 'hr_manager', 'hr_head',
     'purchase_manager', 'branch_manager', 'warehouse_manager',
     'finance_manager', 'accounts_executive',
+    'operations_manager', 'operations_executive',
 ];
 
-// Vendors and their KYC are deliberately SHARED between Purchase and Finance —
-// both departments work the same records rather than keeping duplicates. Any
-// collection listed here is exempt from department filtering; access is instead
-// controlled by role (see canEditVendors / canGenerateKycLink / canReviewKyc below).
-const SHARED_DEPARTMENTS = ['purchase', 'finance'];
+// Vendors and their KYC are deliberately SHARED between Purchase, Operations
+// and Finance — these departments work the same records rather than keeping
+// duplicates. Any collection listed here is exempt from department filtering;
+// access is instead controlled by role (see canEditVendors / canGenerateKycLink
+// / canReviewKyc below) and, for KYC, by the form type (see canAccessKycType).
+const SHARED_DEPARTMENTS = ['purchase', 'finance', 'operations'];
 
 const PURCHASE_ROLES = ROLES_BY_DEPARTMENT.purchase;
 const FINANCE_ROLES = ROLES_BY_DEPARTMENT.finance;
+const OPERATIONS_ROLES = ROLES_BY_DEPARTMENT.operations;
+
+// The two KYC workflows. A vendor's submission belongs to exactly one of them,
+// recorded on the record as `kycType`. Defined in kycConstants (which owns the
+// per-form configuration) and re-exported here so permission callers have one
+// import; kycConstants requires nothing, so there is no cycle.
+const { KYC_TYPES, DEFAULT_KYC_TYPE, isValidKycType } = require('../constants/kycConstants');
 
 // Exactly the CRM Admin role.
 const isAdmin = (user) => user?.role === 'admin';
@@ -72,9 +82,11 @@ const isAdminLevel = (user) => ADMIN_LEVEL_ROLES.includes(user?.role);
 const isDirector = (user) => user?.role === 'director';
 const isPurchaseUser = (user) => PURCHASE_ROLES.includes(user?.role);
 const isFinanceUser = (user) => FINANCE_ROLES.includes(user?.role);
+const isOperationsUser = (user) => OPERATIONS_ROLES.includes(user?.role);
 
 // Who may see the shared vendor register at all
-const canViewVendors = (user) => isAdminLevel(user) || isPurchaseUser(user) || isFinanceUser(user);
+const canViewVendors = (user) =>
+    isAdminLevel(user) || isPurchaseUser(user) || isFinanceUser(user) || isOperationsUser(user);
 
 // Who may CREATE or EDIT a vendor record.
 // Finance is deliberately excluded: their role is to review and verify what
@@ -82,11 +94,44 @@ const canViewVendors = (user) => isAdminLevel(user) || isPurchaseUser(user) || i
 const canEditVendors = (user) =>
     isAdminLevel(user) || user?.role === 'purchase_manager';
 
-// Who may generate and share a vendor's KYC form link.
+// Who may generate and share a vendor's KYC form link, for a given form type.
 // Wider than editing — Finance may request a KYC from a vendor (the source
 // department is recorded on the submission), they just cannot edit the record.
-const canGenerateKycLink = (user) =>
-    isAdminLevel(user) || user?.role === 'purchase_manager' || isFinanceUser(user);
+//
+// Purchase KYC keeps exactly the set that could already generate links
+// (purchase_manager, Finance, administrators) so no existing permission moves.
+// Operations KYC is new, so the whole Operations team may generate one.
+// Finance and administrators reach BOTH workflows.
+const canGenerateKycLink = (user, kycType = DEFAULT_KYC_TYPE) => {
+    if (isAdminLevel(user) || isFinanceUser(user)) return true;
+    if (kycType === 'operations') return isOperationsUser(user);
+    return user?.role === 'purchase_manager';
+};
+
+/**
+ * Who may view / track submissions of a given KYC type.
+ * Purchase staff see Purchase KYC, Operations staff see Operations KYC;
+ * Finance and administrators see both. Mirrors canGenerateKycLink so a user
+ * cannot read a workflow they could not have started.
+ */
+const canAccessKycType = (user, kycType) => {
+    if (isAdminLevel(user) || isFinanceUser(user)) return true;
+    if (kycType === 'operations') return isOperationsUser(user);
+    if (kycType === 'purchase') return isPurchaseUser(user);
+    return false;
+};
+
+/**
+ * The KYC types this user may work with — used to scope vendor listings so
+ * Purchase never sees Operations submissions and vice versa.
+ * Returns null when the user is unrestricted (Finance / administrators).
+ */
+const kycTypesForUser = (user) => {
+    if (isAdminLevel(user) || isFinanceUser(user)) return null;
+    if (isOperationsUser(user)) return ['operations'];
+    if (isPurchaseUser(user)) return ['purchase'];
+    return [];
+};
 
 // Kept as an alias so nothing that already imported it breaks. Prefer the two
 // specific helpers above — they say which action is being authorised.
@@ -147,6 +192,10 @@ module.exports = {
     ADMIN_LEVEL_ROLES,
     PURCHASE_ROLES,
     FINANCE_ROLES,
+    OPERATIONS_ROLES,
+    KYC_TYPES,
+    DEFAULT_KYC_TYPE,
+    isValidKycType,
     isValidDepartment,
     canViewAllInDepartment,
     resolveDepartment,
@@ -156,9 +205,12 @@ module.exports = {
     isDirector,
     isPurchaseUser,
     isFinanceUser,
+    isOperationsUser,
     canViewVendors,
     canEditVendors,
     canGenerateKycLink,
+    canAccessKycType,
+    kycTypesForUser,
     canManageVendors,
     canReviewKyc,
     canManagePurchaseOrders,
