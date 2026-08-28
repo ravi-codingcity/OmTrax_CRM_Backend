@@ -24,12 +24,23 @@ const ALLOWED_TYPES = {
     'application/octet-stream': { ext: ['xls', 'xlsx'], label: 'Excel' },
 };
 
+// Word formats, accepted ONLY on the slots that hand the vendor a .docx
+// template to fill in. Keeping these off the general set stops a Word file
+// being uploaded as, say, a PAN card.
+const WORD_TYPES = {
+    'application/msword': { ext: ['doc'], label: 'DOC' },
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': { ext: ['docx'], label: 'DOCX' },
+    // Some browsers send a generic stream for .doc/.docx; the extension check
+    // below is what actually accepts or rejects those.
+    'application/octet-stream': { ext: ['doc', 'docx'], label: 'Word' },
+};
+
 const ALLOWED_MIME_TYPES = Object.keys(ALLOWED_TYPES);
 const ALLOWED_EXTENSIONS = [...new Set(Object.values(ALLOWED_TYPES).flatMap((t) => t.ext))];
 const ALLOWED_LABEL = 'JPG, JPEG, PDF, XLS or XLSX';
 
-// Maximum documents in one submission (9 slots + a little headroom)
-const MAX_FILES = 12;
+// Maximum documents in one submission (11 slots + a little headroom)
+const MAX_FILES = 14;
 
 // --- Document types --------------------------------------------------------
 
@@ -52,7 +63,37 @@ const KYC_DOCUMENTS = [
     { field: 'balanceSheet', docType: 'balance_sheet', label: 'Balance Sheet', required: false },
     { field: 'profitLoss', docType: 'profit_loss', label: 'Profit & Loss (P&L) Statement', required: false },
     { field: 'agreementUpload', docType: 'agreement', label: 'Agreement', required: false },
+    // Template documents: the vendor downloads a .docx, fills it in offline and
+    // uploads the completed copy. Optional, and they also accept the standard
+    // formats so a signed scan can be returned as a PDF or photo.
+    {
+        field: 'generalAgreement', docType: 'general_agreement',
+        label: 'General Agreement Form', required: false,
+        isTemplate: true, acceptsWord: true,
+    },
+    {
+        field: 'tdsDeclaration', docType: 'tds_declaration',
+        label: 'TDS Declaration – Non-Deduction of TDS (Transporter), Tax Year 2026-27',
+        required: false, isTemplate: true, acceptsWord: true,
+    },
 ];
+
+// Which slots additionally accept .doc / .docx
+const WORD_FIELDS = new Set(KYC_DOCUMENTS.filter((d) => d.acceptsWord).map((d) => d.field));
+
+/**
+ * The accepted formats for one document slot. Template slots take Word files on
+ * top of the standard set; every other slot keeps exactly the rules it had.
+ */
+const allowedTypesFor = (field) =>
+    (WORD_FIELDS.has(field) ? { ...ALLOWED_TYPES, ...WORD_TYPES } : ALLOWED_TYPES);
+
+const allowedExtensionsFor = (field) => [...new Set(
+    Object.values(allowedTypesFor(field)).flatMap((t) => t.ext)
+)];
+
+const allowedLabelFor = (field) =>
+    (WORD_FIELDS.has(field) ? `${ALLOWED_LABEL}, DOC or DOCX` : ALLOWED_LABEL);
 
 // `company_registration` is no longer collected on either form. Existing
 // records that carry one still resolve a label and stay schema-valid via
@@ -125,14 +166,26 @@ const URP_VALUE = 'URP';
 const isUrp = (value) => String(value ?? '').trim().toUpperCase() === URP_VALUE;
 
 /**
- * Non-material services a vendor may offer. Fixed list — the Purchase
+ * Services a vendor may offer, collected by the Operations form. The Purchase
  * Department's item master supplies the material options separately.
+ *
+ * Order is meaningful: the four most commonly picked Operations services lead
+ * the list so the vendor sees them first, and the rest follow alphabetically.
+ * Nothing has been removed.
  */
+const PRIORITY_SERVICES = [
+    'Transportation',
+    'Loading and Unloading',
+    'Labour',
+    'Handy Man',
+];
+
 const OTHER_SERVICES = [
+    ...PRIORITY_SERVICES,
     'AMC',
+    'Air & Sea Freight and Custom Clearance',
     'Furniture & Fixtures',
     'Insurance',
-    'Labour',
     'Office Equipment',
     'Packing Material',
     'Postage & Courier',
@@ -140,30 +193,20 @@ const OTHER_SERVICES = [
     'Professional',
     'Relocation Charges',
     'Rent / Lease',
+    'Repair & Maintenance',
     'Security',
     'Tools and Equipment',
     'Tour & Travel',
-    'Transportation',
-    'Repair & Maintenance',
-    'Air & Sea Freight and Custom Clearance',
 ];
 
 // --- Service location ------------------------------------------------------
 
-// All 28 States and 8 Union Territories. Service Location is a dropdown, never
-// free text, so the value is always one of these.
-const INDIAN_STATES = [
-    'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh',
-    'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka',
-    'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram',
-    'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu',
-    'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal',
-    // Union Territories
-    'Andaman and Nicobar Islands', 'Chandigarh',
-    'Dadra and Nagar Haveli and Daman and Diu', 'Delhi', 'Jammu and Kashmir',
-    'Ladakh', 'Lakshadweep', 'Puducherry',
-];
-const isIndianState = (v) => INDIAN_STATES.includes(String(v ?? '').trim());
+// States, their cities and the submission bounds live in indiaLocations.js —
+// shared reference data rather than a second copy of the same list.
+const {
+    INDIAN_STATES, CITIES_BY_STATE, isIndianState, citiesForState,
+    MAX_SERVICE_STATES, MAX_CITIES_PER_STATE, MAX_CITY_NAME_LENGTH,
+} = require('./indiaLocations');
 
 // Employee-count bands offered for Company Size.
 const COMPANY_SIZES = ['1-10', '11-50', '51-200', '201-500', '501-1000', '1000+'];
@@ -185,16 +228,21 @@ const KYC_FORM_CONFIG = {
     purchase: {
         kycType: 'purchase',
         label: 'Purchase Department KYC',
+        departmentLabel: 'Purchase Department',
         collectsMaterials: true,
         collectsServices: false,
         collectsVehicles: false,
+        servicesLabel: 'Other Services',
     },
     operations: {
         kycType: 'operations',
         label: 'Operations Department KYC',
+        departmentLabel: 'Operations Department',
         collectsMaterials: false,
         collectsServices: true,
         collectsVehicles: true,
+        // Operations calls these Operation Services rather than Other Services
+        servicesLabel: 'Operation Services',
     },
 };
 
@@ -215,8 +263,14 @@ module.exports = {
     URP_VALUE,
     isUrp,
     OTHER_SERVICES,
+    PRIORITY_SERVICES,
     INDIAN_STATES,
+    CITIES_BY_STATE,
     isIndianState,
+    citiesForState,
+    MAX_SERVICE_STATES,
+    MAX_CITIES_PER_STATE,
+    MAX_CITY_NAME_LENGTH,
     COMPANY_SIZES,
     MAX_OTHER_STATE_GST,
     KYC_FORM_CONFIG,
@@ -234,6 +288,11 @@ module.exports = {
     ALLOWED_EXTENSIONS,
     ALLOWED_LABEL,
     KYC_DOCUMENTS,
+    WORD_TYPES,
+    WORD_FIELDS,
+    allowedTypesFor,
+    allowedExtensionsFor,
+    allowedLabelFor,
     DOC_FIELD_TO_TYPE,
     DOC_TYPE_LABELS,
     DOC_TYPE_ENUM,

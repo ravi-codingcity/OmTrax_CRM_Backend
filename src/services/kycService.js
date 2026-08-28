@@ -9,7 +9,7 @@ const Vendor = require('../models/Vendor');
 const { uploadBuffer, signedUrlFor, destroy, isConfigured, NOT_CONFIGURED_MSG } = require('./cloudinaryService');
 const {
     validateKycFields, parseMaterials, parseServices, parseOtherStateGst,
-    validateRequiredDocuments, validateFiles, clean,
+    parseServiceLocations, validateRequiredDocuments, validateFiles, clean,
 } = require('../validators/kycValidator');
 const { DOC_FIELD_TO_TYPE, DOC_TYPE_LABELS, formConfig } = require('../constants/kycConstants');
 
@@ -147,6 +147,7 @@ const validateSubmission = (body, files, kycType) => {
     const { materials, problems: materialProblems } = parseMaterials(body.materials);
     const { services, problems: serviceProblems } = parseServices(body.services);
     const { otherStateGst, problems: gstProblems } = parseOtherStateGst(body.otherStateGst);
+    const { serviceLocations, problems: locationProblems } = parseServiceLocations(body.serviceLocations);
 
     // Only keep what this form actually collects
     const keptMaterials = config.collectsMaterials ? materials : [];
@@ -170,17 +171,19 @@ const validateSubmission = (body, files, kycType) => {
             ...(config.collectsMaterials ? materialProblems.filter((m) => !/at least one material/i.test(m)) : []),
             ...(config.collectsServices ? serviceProblems.filter((m) => !/at least one service/i.test(m)) : []),
             ...gstProblems,
+            ...locationProblems,
         ],
         materials: keptMaterials,
         services: keptServices,
         otherStateGst,
+        serviceLocations,
     };
 };
 
 /**
  * Apply a validated submission to the vendor document (does not save).
  */
-const applySubmission = (vendor, body, materials, uploadedDocs, services = [], otherStateGst = []) => {
+const applySubmission = (vendor, body, materials, uploadedDocs, services = [], otherStateGst = [], serviceLocations = []) => {
     const config = formConfig(vendor.kycType);
 
     VENDOR_WRITABLE.forEach((f) => {
@@ -200,12 +203,23 @@ const applySubmission = (vendor, body, materials, uploadedDocs, services = [], o
     vendor.materials = materials;
     vendor.services = services;
     vendor.otherStateGst = otherStateGst;
+    // Many states, each with optional cities. Replaced wholesale — the form is
+    // the source of truth. The legacy single-value serviceLocation is left as
+    // it was so an older record keeps the value it already had.
+    vendor.serviceLocations = serviceLocations;
 
     // Operations only. Left untouched on a Purchase submission so a value
     // recorded elsewhere is never silently cleared.
     if (config.collectsVehicles && clean(body.numberOfVehicles)) {
         vendor.numberOfVehicles = Number(clean(body.numberOfVehicles));
     }
+
+    // PF and ESI sit behind "do you have one?" checkboxes. When the vendor says
+    // no, the number is cleared here rather than trusted from the body — a
+    // direct API call cannot answer "no" and still store a number.
+    const saidNo = (v) => v === false || ['false', '0', 'no', 'off'].includes(String(v ?? '').trim().toLowerCase());
+    if (body.hasPfNumber !== undefined && saidNo(body.hasPfNumber)) vendor.pfNumber = '';
+    if (body.hasEsiNumber !== undefined && saidNo(body.hasEsiNumber)) vendor.esiNumber = '';
 
     if (uploadedDocs.length) vendor.kycDocuments.push(...uploadedDocs);
 

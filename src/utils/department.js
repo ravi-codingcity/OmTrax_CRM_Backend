@@ -133,6 +133,57 @@ const kycTypesForUser = (user) => {
     return [];
 };
 
+/**
+ * Which KYC types a vendor LISTING should return for this request.
+ *
+ * Two things narrow the result, in order:
+ *
+ *   1. Role — Purchase staff only ever see Purchase KYC, Operations staff only
+ *      Operations KYC. This is the security boundary and cannot be widened.
+ *   2. The department section being browsed. Finance and administrators are
+ *      unrestricted by role, but opening the Purchase Department should show
+ *      Purchase KYC, not both. The client sends the active department on every
+ *      request, so the same account sees the right records in each section and
+ *      still reaches everything by switching section.
+ *
+ * An explicit ?kycType= may narrow further, never widen.
+ *
+ * @returns {string[]|null} the permitted types, or null for "no restriction"
+ */
+const kycScopeForRequest = (req) => {
+    const allowed = kycTypesForUser(req.user);          // null = unrestricted
+
+    const narrow = (type) => {
+        // Only ever a narrowing: a caller may not reach a type their role bars
+        if (!isValidKycType(type) || !canAccessKycType(req.user, type)) return allowed;
+        if (allowed && !allowed.includes(type)) return allowed;
+        return [type];
+    };
+
+    // An explicit filter wins over the ambient department
+    const asked = req.query?.kycType;
+    if (isValidKycType(asked)) return narrow(asked);
+
+    // Otherwise follow the section being browsed. 'finance' deliberately does
+    // not narrow — Finance reviews both workflows side by side.
+    const browsing = req.query?.department || req.body?.department;
+    if (browsing === 'purchase' || browsing === 'operations') return narrow(browsing);
+
+    return allowed;
+};
+
+/**
+ * Turn a scope into a Mongo filter fragment. Records created before the
+ * Operations split carry no kycType and count as Purchase.
+ */
+const kycTypeQuery = (scope) => {
+    if (!scope) return {};                               // unrestricted
+    if (!scope.length) return { kycType: { $in: [] } };  // nothing visible
+    return scope.includes('purchase')
+        ? { kycType: { $in: [...scope, null] } }
+        : { kycType: { $in: scope } };
+};
+
 // Kept as an alias so nothing that already imported it breaks. Prefer the two
 // specific helpers above — they say which action is being authorised.
 const canManageVendors = canEditVendors;
@@ -211,6 +262,8 @@ module.exports = {
     canGenerateKycLink,
     canAccessKycType,
     kycTypesForUser,
+    kycScopeForRequest,
+    kycTypeQuery,
     canManageVendors,
     canReviewKyc,
     canManagePurchaseOrders,

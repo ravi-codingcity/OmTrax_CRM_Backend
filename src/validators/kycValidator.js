@@ -10,9 +10,11 @@ const path = require('path');
 const {
     MAX_FILE_BYTES, MAX_FILE_MB, MAX_FILES,
     ALLOWED_TYPES, ALLOWED_EXTENSIONS, ALLOWED_LABEL,
+    allowedTypesFor, allowedExtensionsFor, allowedLabelFor,
     DOC_FIELD_TO_TYPE, OTHER_SERVICES, URP_VALUE, isUrp, requiredDocumentsFor,
     GST_RX, PAN_RX, IFSC_RX, EMAIL_RX, PHONE_RX,
     isIndianState, COMPANY_SIZES, MAX_OTHER_STATE_GST,
+    MAX_SERVICE_STATES, MAX_CITIES_PER_STATE, MAX_CITY_NAME_LENGTH,
 } = require('../constants/kycConstants');
 
 const clean = (v) => String(v ?? '').trim();
@@ -56,6 +58,8 @@ const validateKycFields = (body = {}) => {
     // ESI, PF, Shop Establishment and IEC are free-format across registrars, so
     // only a sane length is enforced. Service Location and Company Size come
     // from dropdowns, so an off-list value means a hand-crafted request.
+    // Legacy single-value field. New clients send serviceLocations instead,
+    // which parseServiceLocations validates.
     const location = clean(body.serviceLocation);
     if (location && !isIndianState(location)) {
         problems.push('Select a Service Location from the list of Indian States and Union Territories');
@@ -81,6 +85,91 @@ const validateKycFields = (body = {}) => {
     }
 
     return problems;
+};
+
+/**
+ * Parse the Service Locations list: the states a vendor covers, each with an
+ * optional set of cities.
+ *
+ * The STATE is constrained to the official list; cities deliberately are not,
+ * because the vendor may type one the dropdown does not offer. Cities are
+ * trimmed, de-duplicated case-insensitively, and length-capped.
+ *
+ * @returns {{ serviceLocations: Array, problems: string[] }}
+ */
+const parseServiceLocations = (raw) => {
+    const problems = [];
+    let list = raw;
+
+    if (typeof raw === 'string') {
+        if (!raw.trim()) return { serviceLocations: [], problems };
+        try {
+            list = JSON.parse(raw);
+        } catch {
+            return { serviceLocations: [], problems: ['Service location list could not be read'] };
+        }
+    }
+
+    if (list == null) return { serviceLocations: [], problems };
+    if (!Array.isArray(list)) return { serviceLocations: [], problems: ['Service location list must be a list'] };
+    if (list.length > MAX_SERVICE_STATES) {
+        return { serviceLocations: [], problems: [`At most ${MAX_SERVICE_STATES} service locations can be submitted`] };
+    }
+
+    const seenStates = new Set();
+    const rows = [];
+
+    list.forEach((row, i) => {
+        const at = `Service location #${i + 1}`;
+        const state = clean(row && (row.state ?? row.stateName));
+        const rawCities = (row && row.cities) || [];
+
+        // A wholly blank row is an untouched input — skip it silently
+        if (!state && (!Array.isArray(rawCities) || rawCities.length === 0)) return;
+
+        if (!state) {
+            problems.push(`${at}: select a state`);
+            return;
+        }
+        if (!isIndianState(state)) {
+            problems.push(`${at}: "${state}" is not a recognised state`);
+            return;
+        }
+        if (seenStates.has(state)) {
+            problems.push(`${at}: ${state} is listed more than once`);
+            return;
+        }
+
+        if (!Array.isArray(rawCities)) {
+            problems.push(`${at}: cities must be a list`);
+            return;
+        }
+        if (rawCities.length > MAX_CITIES_PER_STATE) {
+            problems.push(`${at}: at most ${MAX_CITIES_PER_STATE} cities per state`);
+            return;
+        }
+
+        const seenCities = new Set();
+        const cities = [];
+        rawCities.forEach((c) => {
+            const name = clean(c);
+            if (!name) return;                         // blank entry, ignore
+            if (name.length > MAX_CITY_NAME_LENGTH) {
+                problems.push(`${at}: "${name.slice(0, 20)}..." is too long for a city name`);
+                return;
+            }
+            const key = name.toLowerCase();
+            if (seenCities.has(key)) return;           // duplicate, ignore
+            seenCities.add(key);
+            cities.push(name);
+        });
+
+        seenStates.add(state);
+        // Cities stay optional — a state on its own is a valid location
+        rows.push({ state, cities });
+    });
+
+    return { serviceLocations: rows, problems };
 };
 
 /**
@@ -268,11 +357,14 @@ const validateFile = (file) => {
 
     // Format — mime type AND extension must both be acceptable, so renaming a
     // .exe to .pdf (or sending a false mime type) does not get through.
-    const byMime = ALLOWED_TYPES[file.mimetype];
-    const extAllowed = ALLOWED_EXTENSIONS.includes(ext);
+    // Which formats count depends on the slot: only the template documents
+    // accept Word files.
+    const field = file.fieldname;
+    const byMime = allowedTypesFor(field)[file.mimetype];
+    const extAllowed = allowedExtensionsFor(field).includes(ext);
 
     if (!byMime || !extAllowed || !byMime.ext.includes(ext)) {
-        return `"${name}" is not an accepted format. Upload ${ALLOWED_LABEL} only.`;
+        return `"${name}" is not an accepted format. Upload ${allowedLabelFor(field)} only.`;
     }
 
     return null;
@@ -308,5 +400,6 @@ const validateFiles = (files = []) => {
 
 module.exports = {
     validateKycFields, parseMaterials, parseServices, parseOtherStateGst,
+    parseServiceLocations,
     validateRequiredDocuments, validateFile, validateFiles, clean,
 };

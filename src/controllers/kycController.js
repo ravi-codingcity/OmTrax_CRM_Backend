@@ -17,7 +17,8 @@ const { FINANCE_ROLES } = require('../utils/department');
 const {
     KYC_DOCUMENTS, MAX_FILE_MB, ALLOWED_LABEL, ALLOWED_EXTENSIONS,
     OTHER_SERVICES, URP_VALUE, isUrp,
-    INDIAN_STATES, COMPANY_SIZES, formConfig, documentsForType,
+    INDIAN_STATES, CITIES_BY_STATE, COMPANY_SIZES, formConfig, documentsForType,
+    allowedExtensionsFor, allowedLabelFor,
 } = require('../constants/kycConstants');
 const Item = require('../models/Item');
 const { MASTER_ITEMS } = require('../constants/purchaseConstants');
@@ -95,6 +96,8 @@ exports.getKycForm = async (req, res) => {
                 // the sections their form collects.
                 kycType: form.kycType,
                 kycTypeLabel: form.label,
+                departmentLabel: form.departmentLabel,
+                servicesLabel: form.servicesLabel,
                 collectsMaterials: form.collectsMaterials,
                 collectsServices: form.collectsServices,
                 collectsVehicles: form.collectsVehicles,
@@ -105,12 +108,20 @@ exports.getKycForm = async (req, res) => {
                 shopEstablishmentNumber: vendor.shopEstablishmentNumber || '',
                 iecCode: vendor.iecCode || '',
                 companySize: vendor.companySize || '',
+                // Many states, each with optional cities
+                serviceLocations: (vendor.serviceLocations || []).map((l) => ({
+                    state: l.state, cities: [...(l.cities || [])],
+                })),
+                // Legacy single value, so an older record still pre-fills
                 serviceLocation: vendor.serviceLocation || '',
                 otherStateGst: (vendor.otherStateGst || []).map((g) => ({
                     state: g.state, gstNumber: g.gstNumber,
                 })),
                 // Dropdown sources for the new fields
                 stateOptions: INDIAN_STATES,
+                // City suggestions per state. The vendor may type one that is
+                // not listed, so this is a convenience, not a constraint.
+                citiesByState: CITIES_BY_STATE,
                 companySizeOptions: COMPANY_SIZES,
                 // Materials only reach the Purchase form, services only the
                 // Operations form — no point sending a list the form hides.
@@ -123,10 +134,15 @@ exports.getKycForm = async (req, res) => {
                 // conditional flag has to travel — a flag omitted here is a rule
                 // the vendor's browser cannot apply.
                 documents: documentsForType(form.kycType).map(
-                    ({ field, label, required, requiresGst, optionalWhenUrp }) => ({
+                    ({ field, label, required, requiresGst, optionalWhenUrp, isTemplate, acceptsWord }) => ({
                         field, label, required,
                         requiresGst: !!requiresGst,
                         optionalWhenUrp: !!optionalWhenUrp,
+                        // A template slot is presented as download -> fill -> upload
+                        isTemplate: !!isTemplate,
+                        acceptsWord: !!acceptsWord,
+                        allowedExtensions: allowedExtensionsFor(field),
+                        allowedLabel: allowedLabelFor(field),
                     })),
                 limits: {
                     maxFileMB: MAX_FILE_MB,
@@ -157,7 +173,7 @@ exports.submitKyc = async (req, res) => {
         // --- Validate everything before touching Cloudinary or Mongo ---
         // The form type comes from the vendor's own record, never from the
         // request body — a caller cannot switch workflows to dodge a rule.
-        const { problems, materials, services, otherStateGst } =
+        const { problems, materials, services, otherStateGst, serviceLocations } =
             kycService.validateSubmission(req.body || {}, files, vendor.kycType);
         if (problems.length) {
             return res.status(400).json({
@@ -182,7 +198,7 @@ exports.submitKyc = async (req, res) => {
             return res.status(502).json({ success: false, message: err.message });
         }
 
-        kycService.applySubmission(vendor, req.body, materials, uploaded, services, otherStateGst);
+        kycService.applySubmission(vendor, req.body, materials, uploaded, services, otherStateGst, serviceLocations);
         await vendor.save();
 
         // --- Notify Finance that a submission is waiting ---

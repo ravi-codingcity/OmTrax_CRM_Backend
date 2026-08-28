@@ -7,6 +7,7 @@ const {
     isFinanceUser, isPurchaseUser, isAdminLevel, isOperationsUser,
     PURCHASE_ROLES, FINANCE_ROLES, OPERATIONS_ROLES,
     isValidKycType, DEFAULT_KYC_TYPE, kycTypesForUser, canAccessKycType,
+    kycScopeForRequest, kycTypeQuery,
 } = require('../utils/department');
 
 const { withSignedDocuments } = require('../services/kycService');
@@ -199,7 +200,11 @@ exports.createKycRequest = async (req, res) => {
                 email: email || undefined,
                 phone: String(req.body.phone || '').trim() || undefined,
                 contactPerson: String(req.body.contactPerson || '').trim() || undefined,
-                department: source,
+                // The owning department follows the WORKFLOW, not whoever
+                // clicked: an Operations KYC belongs to Operations even when
+                // Finance or an administrator generated the link. Who generated
+                // it is recorded separately, in kycSource.
+                department: kycType,
                 createdBy: req.user.id,
                 createdByName: req.user.name,
                 kycStatus: 'not_sent',
@@ -222,6 +227,7 @@ exports.createKycRequest = async (req, res) => {
         vendor.kycStatus = 'sent';
         vendor.kycLinkSentAt = new Date();
         vendor.kycType = kycType;
+        vendor.department = kycType;
         vendor.kycSource = source;
         vendor.kycSourceUser = req.user.id;
         vendor.kycSourceUserName = req.user.name;
@@ -269,19 +275,9 @@ exports.getVendors = async (req, res) => {
         if (kycStatus) filter.kycStatus = kycStatus;
         if (kycSource) filter.kycSource = kycSource;
 
-        // Purchase staff see Purchase KYC, Operations staff see Operations KYC;
-        // Finance and administrators see both. Records predating Operations have
-        // no kycType, so they count as Purchase.
-        const allowedTypes = kycTypesForUser(req.user);
-        if (allowedTypes) {
-            filter.kycType = allowedTypes.includes('purchase')
-                ? { $in: [...allowedTypes, null] }
-                : { $in: allowedTypes };
-        }
-        // An explicit filter may only narrow within what the user may already see
-        if (isValidKycType(kycType) && canAccessKycType(req.user, kycType)) {
-            filter.kycType = kycType === 'purchase' ? { $in: ['purchase', null] } : kycType;
-        }
+        // Scoped by role AND by the department section being browsed, so the
+        // Purchase Department shows Purchase KYC even for Finance and admins.
+        Object.assign(filter, kycTypeQuery(kycScopeForRequest(req)));
         if (search && search.trim()) {
             const rx = new RegExp(escapeRegex(search.trim()), 'i');
             filter.$or = [
@@ -321,17 +317,52 @@ exports.getVendorStats = async (req, res) => {
     try {
         if (denyUnlessCanView(req, res)) return;
 
-        const base = { isActive: true };
-        const [byStatus, bySource, total, recentSubmitted, recentReviewed] = await Promise.all([
+        // Scoped exactly like the vendor list, so a department's dashboard
+        // counts only that department's KYC.
+        const base = Object.assign({ isActive: true }, kycTypeQuery(kycScopeForRequest(req)));
+
+        const [byStatus, bySource, byType, total, recentSubmitted, recentReviewed,
+            byService, byMaterial, byLocation, byCompanySize, vehicleStats] = await Promise.all([
             Vendor.aggregate([{ $match: base }, { $group: { _id: '$kycStatus', count: { $sum: 1 } } }]),
             Vendor.aggregate([{ $match: base }, { $group: { _id: '$kycSource', count: { $sum: 1 } } }]),
+            Vendor.aggregate([{ $match: base }, { $group: { _id: '$kycType', count: { $sum: 1 } } }]),
             Vendor.countDocuments(base),
             Vendor.find({ ...base, kycStatus: { $in: ['submitted', 'under_review'] } })
                 .sort({ kycSubmittedAt: -1 }).limit(10)
-                .select('vendorName companyName kycStatus kycSource kycSubmittedAt'),
+                .select('vendorName companyName kycStatus kycSource kycType kycSubmittedAt'),
             Vendor.find({ ...base, kycStatus: { $in: ['approved', 'rejected'] } })
                 .sort({ 'financeReview.reviewedAt': -1 }).limit(10)
-                .select('vendorName companyName kycStatus financeReview'),
+                .select('vendorName companyName kycStatus kycType financeReview'),
+            // What vendors offer
+            Vendor.aggregate([
+                { $match: base }, { $unwind: '$services' },
+                { $group: { _id: '$services.serviceName', count: { $sum: 1 } } },
+                { $sort: { count: -1, _id: 1 } }, { $limit: 15 },
+            ]),
+            Vendor.aggregate([
+                { $match: base }, { $unwind: '$materials' },
+                { $group: { _id: '$materials.materialName', count: { $sum: 1 } } },
+                { $sort: { count: -1, _id: 1 } }, { $limit: 15 },
+            ]),
+            // Where they operate — counted per state, with the distinct cities
+            Vendor.aggregate([
+                { $match: base }, { $unwind: '$serviceLocations' },
+                { $group: {
+                    _id: '$serviceLocations.state',
+                    count: { $sum: 1 },
+                    cities: { $addToSet: '$serviceLocations.cities' },
+                } },
+                { $sort: { count: -1, _id: 1 } }, { $limit: 20 },
+            ]),
+            Vendor.aggregate([
+                { $match: { ...base, companySize: { $nin: [null, ''] } } },
+                { $group: { _id: '$companySize', count: { $sum: 1 } } },
+                { $sort: { _id: 1 } },
+            ]),
+            Vendor.aggregate([
+                { $match: { ...base, numberOfVehicles: { $gt: 0 } } },
+                { $group: { _id: null, fleet: { $sum: '$numberOfVehicles' }, vendors: { $sum: 1 } } },
+            ]),
         ]);
 
         const statusCounts = {
@@ -339,20 +370,47 @@ exports.getVendorStats = async (req, res) => {
         };
         byStatus.forEach((s) => { if (s._id) statusCounts[s._id] = s.count; });
 
-        const sourceCounts = { purchase: 0, finance: 0 };
+        const sourceCounts = { purchase: 0, finance: 0, operations: 0 };
         bySource.forEach((s) => { if (s._id) sourceCounts[s._id] = s.count; });
+
+        // A record with no kycType predates the Operations split — count it
+        // as Purchase so the two type figures always add up to the total.
+        const typeCounts = { purchase: 0, operations: 0 };
+        byType.forEach((t) => {
+            if (t._id === 'operations') typeCounts.operations += t.count;
+            else typeCounts.purchase += t.count;
+        });
+
+        // Flatten the per-state city arrays into one distinct, sorted list
+        const locations = byLocation.map((l) => {
+            const cities = [...new Set((l.cities || []).flat().filter(Boolean))].sort();
+            return { state: l._id, vendors: l.count, cities, cityCount: cities.length };
+        });
 
         res.status(200).json({
             success: true,
             data: {
                 total,
                 ...statusCounts,
+                // Everything a KYC link has ever been raised for
+                kycRequests: total - statusCounts.not_sent,
+                // Sent but nothing back from the vendor yet
+                pendingKyc: statusCounts.sent,
                 // Anything Finance still has to act on
                 awaitingReview: statusCounts.submitted + statusCounts.under_review,
                 bySource: sourceCounts,
+                byType: typeCounts,
                 recentSubmitted,
                 recentApprovals: recentReviewed.filter((v) => v.kycStatus === 'approved'),
                 recentRejections: recentReviewed.filter((v) => v.kycStatus === 'rejected'),
+                // Operations-facing summaries
+                byService: byService.map((s) => ({ name: s._id, count: s.count })),
+                byMaterial: byMaterial.map((m) => ({ name: m._id, count: m.count })),
+                byLocation: locations,
+                byCompanySize: byCompanySize.map((c) => ({ size: c._id, count: c.count })),
+                fleet: vehicleStats[0]
+                    ? { vehicles: vehicleStats[0].fleet, vendors: vehicleStats[0].vendors }
+                    : { vehicles: 0, vendors: 0 },
             },
         });
     } catch (error) {
@@ -469,7 +527,9 @@ exports.generateKycLink = async (req, res) => {
         vendor.kycStatus = 'sent';
         vendor.kycLinkSentAt = new Date();
         vendor.kycType = kycType;
-        // Source = the department of whoever generated the link
+        // The record belongs to the workflow's department...
+        vendor.department = kycType;
+        // ...while kycSource records the department of whoever generated it
         vendor.kycSource = isFinanceUser(req.user)
             ? 'finance'
             : (isOperationsUser(req.user) ? 'operations' : 'purchase');

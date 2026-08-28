@@ -16,17 +16,21 @@ const path = require('path');
 const {
     MAX_FILE_BYTES, MAX_FILE_MB, MAX_FILES,
     ALLOWED_TYPES, ALLOWED_EXTENSIONS, ALLOWED_LABEL,
+    allowedTypesFor, allowedExtensionsFor, allowedLabelFor,
 } = require('../constants/kycConstants');
 
 const fileFilter = (req, file, cb) => {
     const ext = path.extname(file.originalname || '').slice(1).toLowerCase();
-    const byMime = ALLOWED_TYPES[file.mimetype];
+    // Accepted formats depend on the slot: the two template documents also take
+    // .doc / .docx, everything else keeps the original rules.
+    const types = allowedTypesFor(file.fieldname);
+    const byMime = types[file.mimetype];
 
     // Both the declared mime type and the real extension have to be acceptable.
-    if (byMime && ALLOWED_EXTENSIONS.includes(ext) && byMime.ext.includes(ext)) {
+    if (byMime && allowedExtensionsFor(file.fieldname).includes(ext) && byMime.ext.includes(ext)) {
         return cb(null, true);
     }
-    cb(new Error(`"${file.originalname}" is not an accepted format. Upload ${ALLOWED_LABEL} only.`));
+    cb(new Error(`"${file.originalname}" is not an accepted format. Upload ${allowedLabelFor(file.fieldname)} only.`));
 };
 
 const upload = multer({

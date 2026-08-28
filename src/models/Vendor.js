@@ -47,6 +47,18 @@ const materialSchema = new mongoose.Schema({
     addedAt: { type: Date, default: Date.now }
 }, { _id: true });
 
+// One place the vendor operates: a state, and optionally the cities within it.
+//
+// Structured rather than a flat string so Operations and Finance can query by
+// state or city later. `cities` may be empty — a vendor covering a whole state
+// is not required to name any.
+const serviceLocationSchema = new mongoose.Schema({
+    state: { type: String, required: true, trim: true, index: true },
+    // Free text on purpose: the dropdown is a convenience, and a vendor
+    // operating somewhere not listed types the name in.
+    cities: [{ type: String, trim: true }],
+}, { _id: true });
+
 // One additional state registration: the state, and the GST number held there.
 // Only populated when the vendor says they are registered in other states.
 const otherStateGstSchema = new mongoose.Schema({
@@ -116,7 +128,12 @@ const vendorSchema = new mongoose.Schema({
     shopEstablishmentNumber: { type: String, trim: true },
     iecCode: { type: String, trim: true, uppercase: true },
     companySize: { type: String, trim: true },
-    // One of INDIAN_STATES — chosen from a dropdown, never free text
+    // Where the vendor provides services: many states, each with optional
+    // cities. This is the field to read.
+    serviceLocations: [serviceLocationSchema],
+    // Legacy single-state value from before multi-location support. Kept so
+    // existing records keep their data and nothing that reads it breaks; new
+    // submissions populate serviceLocations above.
     serviceLocation: { type: String, trim: true },
 
     // --- Banking (completed via the KYC form) ---
