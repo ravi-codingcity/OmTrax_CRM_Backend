@@ -109,6 +109,18 @@ const canGenerateKycLink = (user, kycType = DEFAULT_KYC_TYPE) => {
 };
 
 /**
+ * Who may generate a Correction KYC Link after Finance sends a KYC back: the
+ * department that owns that workflow, and administrators. Finance sends a KYC
+ * back but does not generate the correction — the owning department decides
+ * which details the vendor resubmits.
+ */
+const canGenerateCorrectionLink = (user, kycType = DEFAULT_KYC_TYPE) => {
+    if (isAdminLevel(user)) return true;
+    if (kycType === 'operations') return isOperationsUser(user);
+    return user?.role === 'purchase_manager';
+};
+
+/**
  * Who may view / track submissions of a given KYC type.
  * Purchase staff see Purchase KYC, Operations staff see Operations KYC;
  * Finance and administrators see both. Mirrors canGenerateKycLink so a user
@@ -260,6 +272,7 @@ module.exports = {
     canViewVendors,
     canEditVendors,
     canGenerateKycLink,
+    canGenerateCorrectionLink,
     canAccessKycType,
     kycTypesForUser,
     kycScopeForRequest,

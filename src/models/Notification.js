@@ -12,6 +12,8 @@ const notificationSchema = new mongoose.Schema({
             // Vendor KYC workflow (Purchase <-> Finance)
             'vendor_kyc_submitted', 'vendor_kyc_approved', 'vendor_kyc_rejected',
             'vendor_kyc_link_sent',
+            // Finance sent a KYC back to its department for correction
+            'vendor_kyc_correction_requested',
             // Purchase Orders. 'po_sent' is no longer created — POs are sent
             // outside the CRM — but stays valid so notifications recorded
             // before that change can still be read and marked as read.
@@ -89,13 +91,15 @@ const notificationSchema = new mongoose.Schema({
             'admin', 'salesperson', 'manager', 'recruiter', 'team_leader',
             'senior_recruiter', 'hr_executive', 'hr_manager', 'hr_head',
             'purchase_manager', 'warehouse_manager', 'branch_manager',
-            'finance_manager', 'accounts_executive', 'director', 'all'
+            'finance_manager', 'accounts_executive', 'director',
+            // So an Operations KYC sent back for correction reaches Operations
+            'operations_manager', 'operations_executive', 'all'
         ],
         default: 'all'
     },
     department: {
         type: String,
-        enum: ['relocation', 'hr', 'purchase', 'finance', 'director'],
+        enum: ['relocation', 'hr', 'purchase', 'finance', 'director', 'operations'],
         default: 'relocation',
         index: true
     },
@@ -190,6 +194,10 @@ notificationSchema.pre('save', function(next) {
             case 'vendor_kyc_link_sent':
                 this.title = 'KYC Link Shared';
                 this.message = this.message || `KYC form link shared with ${this.companyName}`;
+                break;
+            case 'vendor_kyc_correction_requested':
+                this.title = 'KYC Sent Back for Correction';
+                this.message = this.message || `Finance sent the KYC back for correction: ${this.companyName}`;
                 break;
             case 'po_created':
                 this.title = 'Purchase Order Created';

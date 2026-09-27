@@ -37,6 +37,13 @@ router.post('/:id/kyc-link/sent', vendorController.markKycLinkSent);
 router.post('/:id/kyc/review', vendorController.startKycReview);
 router.post('/:id/kyc/decision', vendorController.decideKyc);
 
+// Correction / resubmission. Finance sends a submitted KYC back; the owning
+// department then generates a Correction KYC Link for the selected details.
+// Permissions and the "was it actually sent back?" check are in the controller.
+router.post('/:id/kyc/correction-request', vendorController.requestKycCorrection);
+router.get('/:id/kyc/correction', vendorController.getCorrectionOptions);
+router.post('/:id/kyc/correction-link', vendorController.generateCorrectionLink);
+
 // KYC documents — signed, expiring URLs issued only to authorised callers.
 // Available to Purchase AND Finance so both can view and download.
 router.get('/:id/documents', vendorDocumentController.listDocuments);

@@ -4,6 +4,7 @@ const {
     DOC_TYPE_ENUM,
     KYC_STATUSES: STATUS_LIST,
     KYC_TYPES: KYC_TYPE_LIST,
+    CORRECTION_ROUND_STATUSES,
 } = require('../constants/kycConstants');
 
 // Shared vendor register for the Purchase and Finance departments.
@@ -78,7 +79,9 @@ const kycHistorySchema = new mongoose.Schema({
     action: {
         type: String,
         enum: ['created', 'link_generated', 'link_sent', 'submitted',
-            'under_review', 'approved', 'rejected', 'reset', 'updated'],
+            'under_review', 'approved', 'rejected', 'reset', 'updated',
+            // Correction / resubmission workflow
+            'correction_requested', 'correction_link_generated', 'correction_submitted'],
         required: true
     },
     at: { type: Date, default: Date.now },
@@ -89,6 +92,41 @@ const kycHistorySchema = new mongoose.Schema({
     toStatus: { type: String, trim: true },
     remarks: { type: String, trim: true }
 }, { _id: false });
+
+// One correction round: Finance sends a submitted KYC back, the owning
+// department generates a Correction KYC Link naming the details to fix, and the
+// vendor resubmits only those. Kept as a list so every round stays on record;
+// the last entry is the current one.
+const kycCorrectionSchema = new mongoose.Schema({
+    round: { type: Number, required: true },
+    status: { type: String, enum: CORRECTION_ROUND_STATUSES, required: true },
+    // Finance's send-back
+    remarks: { type: String, trim: true },
+    requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    requestedByName: { type: String, trim: true },
+    requestedAt: { type: Date },
+    // The department's Correction KYC Link: the keys of the details and
+    // documents selected (see correctionFieldsFor) and an optional note that
+    // the vendor sees on the form
+    fields: { type: [String], default: undefined },
+    vendorNote: { type: String, trim: true },
+    linkGeneratedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    linkGeneratedByName: { type: String, trim: true },
+    linkGeneratedAt: { type: Date },
+    // The vendor's resubmission
+    submittedAt: { type: Date },
+    // What the corrected uploads replaced — names only; the replaced files are
+    // removed from Cloudinary once the corrected record is saved
+    replacedDocuments: {
+        type: [{
+            _id: false,
+            docType: { type: String, trim: true },
+            originalName: { type: String, trim: true },
+            uploadedAt: { type: Date },
+        }],
+        default: undefined,
+    },
+}, { _id: true });
 
 const KYC_STATUSES = STATUS_LIST;
 
@@ -185,6 +223,10 @@ const vendorSchema = new mongoose.Schema({
     // it can be copied again later by anyone authorised — the token itself is
     // never returned by the API.
     kycLinkUrl: { type: String, trim: true },
+    // What the current link opens. 'correction' marks a Correction KYC Link —
+    // the form shows only the selected details and documents. Unset on every
+    // link generated before corrections existed, which are all full forms.
+    kycLinkType: { type: String, enum: ['standard', 'correction'] },
     kycTokenGeneratedAt: { type: Date },
     kycTokenExpiresAt: { type: Date },
     kycLinkSentAt: { type: Date },
@@ -214,6 +256,10 @@ const vendorSchema = new mongoose.Schema({
     },
 
     kycHistory: [kycHistorySchema],
+
+    // Correction rounds, oldest first. No default, so records that have never
+    // been sent back are left exactly as they are.
+    kycCorrections: { type: [kycCorrectionSchema], default: undefined },
 
     // --- Ownership ---
     // Which department created the vendor. NOT used to restrict visibility —
@@ -245,7 +291,17 @@ vendorSchema.methods.isTokenUsable = function () {
     if (!this.kycToken) return false;
     if (this.kycTokenExpiresAt && this.kycTokenExpiresAt < new Date()) return false;
     // Once submitted, the form locks until a new request is generated.
-    return ['sent', 'not_sent'].includes(this.kycStatus);
+    if (['sent', 'not_sent'].includes(this.kycStatus)) return true;
+    // A Correction KYC Link opens only while its correction is outstanding
+    return this.kycStatus === 'correction_sent' && this.kycLinkType === 'correction';
+};
+
+// The correction round in progress, or null. A round is in progress from
+// Finance's send-back until the vendor resubmits (or a full link replaces it).
+vendorSchema.methods.openCorrection = function () {
+    const rounds = this.kycCorrections || [];
+    const last = rounds[rounds.length - 1];
+    return last && ['requested', 'link_generated'].includes(last.status) ? last : null;
 };
 
 // Append one line to the audit trail.

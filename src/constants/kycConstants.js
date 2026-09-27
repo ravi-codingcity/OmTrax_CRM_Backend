@@ -176,7 +176,22 @@ const VEHICLE_SERVICE = 'Transportation';
 
 // --- KYC workflow ----------------------------------------------------------
 
-const KYC_STATUSES = ['not_sent', 'sent', 'submitted', 'under_review', 'approved', 'rejected'];
+// `correction_required` — Finance sent a submitted KYC back to the department
+//                         that owns it, to have specific details corrected.
+// `correction_sent`     — that department generated a Correction KYC Link; the
+//                         vendor has not resubmitted yet. Their resubmission
+//                         returns the KYC to `submitted` for Finance to review.
+const KYC_STATUSES = [
+    'not_sent', 'sent', 'submitted', 'under_review', 'approved', 'rejected',
+    'correction_required', 'correction_sent',
+];
+
+// One correction round, from Finance's send-back to the vendor's resubmission.
+//   requested      — Finance sent it back; no correction link yet
+//   link_generated — the department generated a Correction KYC Link
+//   submitted      — the vendor resubmitted the corrected details
+//   superseded     — a full KYC link was generated instead, ending the round
+const CORRECTION_ROUND_STATUSES = ['requested', 'link_generated', 'submitted', 'superseded'];
 
 // How long a generated KYC link stays usable
 const TOKEN_TTL_DAYS = 30;
@@ -279,6 +294,77 @@ const isValidKycType = (t) => KYC_TYPES.includes(t);
 // created before this release was.
 const formConfig = (kycType) => KYC_FORM_CONFIG[kycType] || KYC_FORM_CONFIG[DEFAULT_KYC_TYPE];
 
+// --- Correction / resubmission ----------------------------------------------
+
+/**
+ * The details a Correction KYC Link can ask the vendor to resubmit, in the
+ * order they appear on the KYC form. Each entry is one checkbox for the
+ * department, covering the form inputs listed in `bodyFields` and/or one of the
+ * form's lists (`list`). `when` limits an entry to the forms that collect it,
+ * so the choices always match the form the vendor actually filled in.
+ *
+ * Documents are not listed here: every document slot the form offers
+ * (documentsForType) is a correction choice of its own — see correctionFieldsFor.
+ */
+const CORRECTION_DETAIL_FIELDS = [
+    { key: 'vendorName', label: 'Legal Name (as per PAN)', bodyFields: ['vendorName'] },
+    { key: 'companyName', label: 'Vendor Company Name', bodyFields: ['companyName'] },
+    { key: 'address', label: 'Company Address (City, State, Pincode)', bodyFields: ['address', 'city', 'state', 'pincode'] },
+    { key: 'contactDetails', label: 'Contact Details (Contact Person, Email, Phone)', bodyFields: ['contactPerson', 'email', 'phone'] },
+    { key: 'gstNumber', label: 'GST Number / URP', bodyFields: ['gstNumber'] },
+    { key: 'otherStateGst', label: 'Other State GST Details', list: 'otherStateGst' },
+    { key: 'panNumber', label: 'PAN Number', bodyFields: ['panNumber'] },
+    { key: 'companySize', label: 'Company Size', bodyFields: ['companySize'] },
+    { key: 'shopEstablishment', label: 'Shop Establishment Number', bodyFields: ['shopEstablishmentNumber'] },
+    { key: 'serviceLocations', label: 'Service Locations', list: 'serviceLocations' },
+    {
+        key: 'materials', label: 'Material Details', list: 'materials',
+        when: (cfg) => cfg.collectsMaterials,
+    },
+    {
+        // The vehicle count belongs with the services it depends on
+        key: 'services',
+        label: (cfg) => (cfg.collectsVehicles ? `${cfg.servicesLabel} (and Number of Vehicles)` : cfg.servicesLabel),
+        list: 'services',
+        bodyFields: (cfg) => (cfg.collectsVehicles ? ['numberOfVehicles'] : []),
+        when: (cfg) => cfg.collectsServices,
+    },
+    { key: 'bankDetails', label: 'Bank Details', bodyFields: ['bankName', 'accountHolderName', 'accountNumber', 'ifscCode'] },
+    { key: 'additionalInfo', label: 'Additional Information', bodyFields: ['kycAdditionalInfo'] },
+];
+
+/**
+ * Every correction choice for one KYC form type: the details it collects, then
+ * each document slot it offers. Derived from the same configuration the form
+ * itself is built from, so the two cannot drift apart.
+ *
+ * @returns {Array<{ key, label, type: 'field'|'document', bodyFields?, list?, docType?, isTemplate? }>}
+ */
+const correctionFieldsFor = (kycType) => {
+    const cfg = formConfig(kycType);
+    const details = CORRECTION_DETAIL_FIELDS
+        .filter((f) => !f.when || f.when(cfg))
+        .map((f) => ({
+            key: f.key,
+            label: typeof f.label === 'function' ? f.label(cfg) : f.label,
+            type: 'field',
+            bodyFields: typeof f.bodyFields === 'function' ? f.bodyFields(cfg) : (f.bodyFields || []),
+            list: f.list || null,
+        }));
+    const documents = documentsForType(cfg.kycType).map((d) => ({
+        key: d.field,
+        label: d.label,
+        type: 'document',
+        docType: d.docType,
+        isTemplate: !!d.isTemplate,
+        requiresGst: !!d.requiresGst,
+    }));
+    return [...details, ...documents];
+};
+
+// A remark or note long enough to be useful, short enough to stay a note
+const MAX_CORRECTION_TEXT = 1000;
+
 const GST_RX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
 const PAN_RX = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
 const IFSC_RX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
@@ -324,6 +410,10 @@ module.exports = {
     DOC_TYPE_LABELS,
     DOC_TYPE_ENUM,
     KYC_STATUSES,
+    CORRECTION_ROUND_STATUSES,
+    CORRECTION_DETAIL_FIELDS,
+    correctionFieldsFor,
+    MAX_CORRECTION_TEXT,
     TOKEN_TTL_DAYS,
     SIGNED_URL_TTL_SECONDS,
     GST_RX,

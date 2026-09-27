@@ -4,6 +4,7 @@ const User = require('../models/User');
 const { validationResult } = require('express-validator');
 const {
     canViewVendors, canEditVendors, canGenerateKycLink, canReviewKyc,
+    canGenerateCorrectionLink,
     isFinanceUser, isPurchaseUser, isAdminLevel, isOperationsUser,
     PURCHASE_ROLES, FINANCE_ROLES, OPERATIONS_ROLES,
     isValidKycType, DEFAULT_KYC_TYPE, kycTypesForUser, canAccessKycType,
@@ -11,7 +12,14 @@ const {
 } = require('../utils/department');
 
 const { withSignedDocuments } = require('../services/kycService');
-const { TOKEN_TTL_DAYS } = require('../constants/kycConstants');
+const { TOKEN_TTL_DAYS, correctionFieldsFor, MAX_CORRECTION_TEXT } = require('../constants/kycConstants');
+
+// Generating a full KYC link while a correction is open replaces the
+// correction: the vendor fills in the whole form again, so the round ends.
+const supersedeOpenCorrection = (vendor) => {
+    const open = vendor.openCorrection();
+    if (open) open.status = 'superseded';
+};
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -247,6 +255,8 @@ exports.createKycRequest = async (req, res) => {
         // Persist the exact URL that gets shared, so it can be copied again
         // later by anyone authorised without minting a second link.
         vendor.kycLinkUrl = publicKycUrl(vendor.kycToken);
+        vendor.kycLinkType = 'standard';
+        supersedeOpenCorrection(vendor);
         vendor.kycTokenGeneratedAt = new Date();
         vendor.kycTokenExpiresAt = new Date(Date.now() + TOKEN_TTL_DAYS * 86400000);
         vendor.kycStatus = 'sent';
@@ -392,6 +402,7 @@ exports.getVendorStats = async (req, res) => {
 
         const statusCounts = {
             not_sent: 0, sent: 0, submitted: 0, under_review: 0, approved: 0, rejected: 0,
+            correction_required: 0, correction_sent: 0,
         };
         byStatus.forEach((s) => { if (s._id) statusCounts[s._id] = s.count; });
 
@@ -423,6 +434,8 @@ exports.getVendorStats = async (req, res) => {
                 pendingKyc: statusCounts.sent,
                 // Anything Finance still has to act on
                 awaitingReview: statusCounts.submitted + statusCounts.under_review,
+                // Sent back by Finance, not yet resubmitted by the vendor
+                awaitingCorrection: statusCounts.correction_required + statusCounts.correction_sent,
                 bySource: sourceCounts,
                 byType: typeCounts,
                 recentSubmitted,
@@ -534,7 +547,7 @@ exports.getSavedKycLink = async (req, res) => {
         const vendor = await Vendor.findById(req.params.id)
             .select('vendorName companyName kycToken kycLinkUrl kycType kycStatus '
                 + 'kycSource kycSourceUserName kycTokenGeneratedAt kycTokenExpiresAt '
-                + 'kycLinkSentAt kycSubmittedAt nameIsPlaceholder kycRequestName');
+                + 'kycLinkSentAt kycSubmittedAt nameIsPlaceholder kycRequestName kycLinkType');
         if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
         if (denyUnlessCanAccessKyc(req, res, vendor)) return;
 
@@ -577,8 +590,11 @@ exports.getSavedKycLink = async (req, res) => {
                 lastSentAt: vendor.kycLinkSentAt,
                 submittedAt: vendor.kycSubmittedAt,
                 expired,
+                // 'correction' when the saved link is a Correction KYC Link
+                linkType: vendor.kycLinkType || 'standard',
                 // A submitted form can no longer be filled in again
-                usable: !expired && ['sent', 'not_sent'].includes(vendor.kycStatus),
+                usable: !expired && (['sent', 'not_sent'].includes(vendor.kycStatus)
+                    || (vendor.kycStatus === 'correction_sent' && vendor.kycLinkType === 'correction')),
             },
         });
     } catch (error) {
@@ -616,6 +632,8 @@ exports.generateKycLink = async (req, res) => {
         const previous = vendor.kycStatus;
         vendor.kycToken = Vendor.generateToken();
         vendor.kycLinkUrl = publicKycUrl(vendor.kycToken);
+        vendor.kycLinkType = 'standard';
+        supersedeOpenCorrection(vendor);
         vendor.kycTokenGeneratedAt = new Date();
         vendor.kycTokenExpiresAt = new Date(Date.now() + TOKEN_TTL_DAYS * 86400000);
         vendor.kycStatus = 'sent';
@@ -664,10 +682,11 @@ exports.generateKycLink = async (req, res) => {
 // @access  Private (admin, purchase_manager, finance)
 exports.markKycLinkSent = async (req, res) => {
     try {
-        if (denyUnlessCanGenerateLink(req, res)) return;
-
         const vendor = await Vendor.findById(req.params.id);
         if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
+        // Checked against the vendor's own workflow, so the Operations team can
+        // record sharing an Operations link (the check used to assume Purchase)
+        if (denyUnlessCanGenerateLink(req, res, vendor.kycType || DEFAULT_KYC_TYPE)) return;
         if (!vendor.kycToken) {
             return res.status(400).json({ success: false, message: 'Generate a KYC link first' });
         }
@@ -789,6 +808,236 @@ exports.decideKyc = async (req, res) => {
         });
     } catch (error) {
         console.error('Decide KYC error:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Correction / resubmission
+//
+//   Finance sends a submitted KYC back  ->  correction_required
+//   The owning department generates a Correction KYC Link naming the details
+//   and documents to fix                ->  correction_sent
+//   The vendor resubmits only those     ->  submitted (Finance reviews again)
+// ---------------------------------------------------------------------------
+
+const departmentOf = (vendor) => (vendor.kycType === 'operations' ? 'operations' : 'purchase');
+const departmentLabelOf = (vendor) => (vendor.kycType === 'operations' ? 'Operations Department' : 'Purchase Department');
+
+// A Correction KYC Link is generated only for a KYC Finance has sent back and
+// the vendor has not yet resubmitted.
+const denyUnlessCorrectionOpen = (res, vendor) => {
+    const round = vendor.openCorrection();
+    if (round && ['correction_required', 'correction_sent'].includes(vendor.kycStatus)) return null;
+    res.status(400).json({
+        success: false,
+        message: 'Finance has not sent this KYC back for correction, so a Correction KYC Link cannot be generated.',
+    });
+    return true;
+};
+
+const denyUnlessCanCorrect = (req, res, vendor) => {
+    if (canGenerateCorrectionLink(req.user, vendor.kycType || DEFAULT_KYC_TYPE)) return false;
+    res.status(403).json({
+        success: false,
+        message: `Only the ${departmentLabelOf(vendor)} can generate a Correction KYC Link for this vendor.`,
+    });
+    return true;
+};
+
+// @desc    Finance sends a submitted KYC back to the department that owns it,
+//          explaining what needs correcting. The KYC is NOT approved.
+// @route   POST /api/vendors/:id/kyc/correction-request
+// @access  Private (Finance, admin, director)
+exports.requestKycCorrection = async (req, res) => {
+    try {
+        if (!canReviewKyc(req.user)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Only the Finance department can send a KYC back for correction',
+            });
+        }
+
+        const remarks = String(req.body?.remarks || '').trim();
+        if (!remarks) {
+            return res.status(400).json({ success: false, message: 'Explain what needs to be corrected before sending the KYC back' });
+        }
+        if (remarks.length > MAX_CORRECTION_TEXT) {
+            return res.status(400).json({ success: false, message: `Keep the remarks under ${MAX_CORRECTION_TEXT} characters` });
+        }
+
+        const vendor = await Vendor.findById(req.params.id);
+        if (!vendor || !vendor.isActive) return res.status(404).json({ success: false, message: 'Vendor not found' });
+        if (!['submitted', 'under_review'].includes(vendor.kycStatus)) {
+            return res.status(400).json({
+                success: false,
+                message: `Only a submitted KYC can be sent back for correction. Current status: "${vendor.kycStatus.replace(/_/g, ' ')}".`,
+            });
+        }
+
+        const from = vendor.kycStatus;
+        const round = {
+            round: (vendor.kycCorrections || []).length + 1,
+            status: 'requested',
+            remarks,
+            requestedBy: req.user.id,
+            requestedByName: req.user.name,
+            requestedAt: new Date(),
+        };
+        if (vendor.kycCorrections) vendor.kycCorrections.push(round);
+        else vendor.kycCorrections = [round];
+
+        vendor.kycStatus = 'correction_required';
+        vendor.logKyc('correction_requested', req.user, {
+            fromStatus: from,
+            toStatus: 'correction_required',
+            remarks: `Round ${round.round}: ${remarks}`,
+        });
+        await vendor.save();
+
+        // Tell the department that owns this KYC, and mirror it to admins
+        const department = departmentOf(vendor);
+        const payload = {
+            type: 'vendor_kyc_correction_requested',
+            vendor: vendor._id,
+            companyName: vendor.companyName || vendor.vendorName,
+            salesPerson: req.user.id,
+            salesPersonName: req.user.name,
+            remark: remarks,
+            department,
+        };
+        await notifyRoles(department === 'operations' ? OPERATIONS_ROLES : PURCHASE_ROLES, payload);
+        await notify({ ...payload, forRole: 'admin' });
+
+        res.status(200).json({
+            success: true,
+            message: `KYC sent back to the ${departmentLabelOf(vendor)} for correction`,
+            data: vendor.toSafeJSON(),
+        });
+    } catch (error) {
+        console.error('Request KYC correction error:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    }
+};
+
+// @desc    What a Correction KYC Link can ask for on this vendor's form, and
+//          Finance's remarks for the correction in progress
+// @route   GET /api/vendors/:id/kyc/correction
+// @access  Private (owning department, admin, director)
+exports.getCorrectionOptions = async (req, res) => {
+    try {
+        const vendor = await Vendor.findById(req.params.id);
+        if (!vendor || !vendor.isActive) return res.status(404).json({ success: false, message: 'Vendor not found' });
+        if (denyUnlessCanAccessKyc(req, res, vendor)) return;
+        if (denyUnlessCanCorrect(req, res, vendor)) return;
+        if (denyUnlessCorrectionOpen(res, vendor)) return;
+
+        const round = vendor.openCorrection();
+        res.status(200).json({
+            success: true,
+            data: {
+                vendorName: vendor.vendorName,
+                kycType: vendor.kycType || DEFAULT_KYC_TYPE,
+                kycStatus: vendor.kycStatus,
+                fields: correctionFieldsFor(vendor.kycType).map(({ key, label, type, isTemplate }) => ({
+                    key, label, type, ...(type === 'document' ? { isTemplate } : {}),
+                })),
+                correction: {
+                    round: round.round,
+                    status: round.status,
+                    remarks: round.remarks,
+                    requestedByName: round.requestedByName,
+                    requestedAt: round.requestedAt,
+                    fields: round.fields || [],
+                    vendorNote: round.vendorNote || '',
+                    linkGeneratedByName: round.linkGeneratedByName,
+                    linkGeneratedAt: round.linkGeneratedAt,
+                },
+            },
+        });
+    } catch (error) {
+        console.error('Get correction options error:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    }
+};
+
+// @desc    Generate a Correction KYC Link that asks the vendor to resubmit only
+//          the selected details and documents. Generating again (before the
+//          vendor resubmits) replaces the previous correction link.
+// @route   POST /api/vendors/:id/kyc/correction-link
+// @access  Private (owning department, admin, director)
+exports.generateCorrectionLink = async (req, res) => {
+    try {
+        const vendor = await Vendor.findById(req.params.id);
+        if (!vendor || !vendor.isActive) return res.status(404).json({ success: false, message: 'Vendor not found' });
+        if (denyUnlessCanAccessKyc(req, res, vendor)) return;
+        if (denyUnlessCanCorrect(req, res, vendor)) return;
+        if (denyUnlessCorrectionOpen(res, vendor)) return;
+
+        const requested = Array.isArray(req.body?.fields) ? req.body.fields.map((f) => String(f).trim()) : [];
+        const options = correctionFieldsFor(vendor.kycType);
+        const known = new Set(options.map((o) => o.key));
+        const unknown = requested.filter((f) => !known.has(f));
+        if (unknown.length) {
+            return res.status(400).json({
+                success: false,
+                message: `Not part of this vendor's KYC form: ${unknown.join(', ')}`,
+            });
+        }
+        // Stored in form order, whatever order they were ticked in
+        const wanted = new Set(requested);
+        const selected = options.filter((o) => wanted.has(o.key));
+        if (!selected.length) {
+            return res.status(400).json({ success: false, message: 'Select at least one field or document for correction' });
+        }
+
+        const vendorNote = String(req.body?.vendorNote || '').trim();
+        if (vendorNote.length > MAX_CORRECTION_TEXT) {
+            return res.status(400).json({ success: false, message: `Keep the note under ${MAX_CORRECTION_TEXT} characters` });
+        }
+
+        const round = vendor.openCorrection();
+        const previous = vendor.kycStatus;
+        const regenerated = round.status === 'link_generated';
+
+        // A fresh token, so any earlier correction link stops working
+        vendor.kycToken = Vendor.generateToken();
+        vendor.kycLinkUrl = publicKycUrl(vendor.kycToken);
+        vendor.kycLinkType = 'correction';
+        vendor.kycTokenGeneratedAt = new Date();
+        vendor.kycTokenExpiresAt = new Date(Date.now() + TOKEN_TTL_DAYS * 86400000);
+        vendor.kycLinkSentAt = new Date();
+        vendor.kycStatus = 'correction_sent';
+
+        round.status = 'link_generated';
+        round.fields = selected.map((o) => o.key);
+        round.vendorNote = vendorNote || undefined;
+        round.linkGeneratedBy = req.user.id;
+        round.linkGeneratedByName = req.user.name;
+        round.linkGeneratedAt = new Date();
+
+        vendor.logKyc('correction_link_generated', req.user, {
+            fromStatus: previous,
+            toStatus: 'correction_sent',
+            remarks: `Round ${round.round}${regenerated ? ' (replaces the previous correction link)' : ''}: ${selected.map((o) => o.label).join(', ')}`,
+        });
+        await vendor.save();
+
+        res.status(201).json({
+            success: true,
+            message: 'Correction KYC Link generated. Share it with the vendor.',
+            data: {
+                kycLink: vendor.kycLinkUrl,
+                linkType: 'correction',
+                kycType: vendor.kycType || DEFAULT_KYC_TYPE,
+                expiresAt: vendor.kycTokenExpiresAt,
+                fields: selected.map(({ key, label, type }) => ({ key, label, type })),
+                round: round.round,
+                vendor: vendor.toSafeJSON(),
+            },
+        });
+    } catch (error) {
+        console.error('Generate correction link error:', error);
         res.status(500).json({ success: false, message: 'Server error', error: error.message });
     }
 };

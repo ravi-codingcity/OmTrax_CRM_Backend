@@ -11,7 +11,7 @@
 
 const Notification = require('../models/Notification');
 const kycService = require('../services/kycService');
-const { isConfigured } = require('../services/cloudinaryService');
+const { isConfigured, destroy } = require('../services/cloudinaryService');
 const { notifyRoles } = require('./vendorController');
 const { FINANCE_ROLES } = require('../utils/department');
 const {
@@ -55,9 +55,44 @@ const materialOptions = async () => {
 // @desc    Fetch the form behind a KYC link (what the vendor sees)
 // @route   GET /api/kyc/:token
 // @access  Public
+/**
+ * What a Correction KYC Link adds to the form payload: the selected details and
+ * documents, the department's note, and — for each selected document — the
+ * name of the file currently on record, so the vendor knows what is being
+ * replaced. File URLs are never sent. Bank details and additional information
+ * are pre-filled only when they are being corrected.
+ */
+const correctionPayload = (vendor, round) => {
+    const selected = kycService.selectedCorrectionFields(vendor, round);
+    const keys = new Set(selected.map((f) => f.key));
+    const currentDocuments = {};
+    selected.filter((f) => f.type === 'document').forEach((f) => {
+        const doc = [...(vendor.kycDocuments || [])].reverse().find((d) => d.docType === f.docType);
+        if (doc) currentDocuments[f.key] = { originalName: doc.originalName, uploadedAt: doc.uploadedAt };
+    });
+    return {
+        ...(keys.has('bankDetails') ? {
+            bankName: vendor.bankName || '',
+            accountHolderName: vendor.accountHolderName || '',
+            accountNumber: vendor.accountNumber || '',
+            ifscCode: vendor.ifscCode || '',
+        } : {}),
+        ...(keys.has('additionalInfo') ? { kycAdditionalInfo: vendor.kycAdditionalInfo || '' } : {}),
+        correction: {
+            round: round.round,
+            vendorNote: round.vendorNote || '',
+            fields: selected.map(({ key, label, type, bodyFields, list, isTemplate, requiresGst }) => ({
+                key, label, type,
+                ...(type === 'field' ? { bodyFields, list } : { isTemplate, requiresGst }),
+            })),
+            currentDocuments,
+        },
+    };
+};
+
 exports.getKycForm = async (req, res) => {
     try {
-        const { vendor, error, reason } = await kycService.resolveToken(req.params.token);
+        const { vendor, error, reason, correction } = await kycService.resolveToken(req.params.token);
 
         if (error) {
             return res.status(reason === 'already_submitted' ? 409 : 410).json({
@@ -150,6 +185,8 @@ exports.getKycForm = async (req, res) => {
                     allowedExtensions: ALLOWED_EXTENSIONS,
                 },
                 uploadsEnabled: isConfigured,
+                // Present only on a Correction KYC Link
+                ...(correction ? correctionPayload(vendor, correction) : {}),
             },
         });
     } catch (error) {
@@ -158,17 +195,99 @@ exports.getKycForm = async (req, res) => {
     }
 };
 
+/**
+ * The vendor resubmits the details and documents selected for correction.
+ * Updates the SAME vendor record, then returns it to Finance's review queue.
+ */
+const submitCorrection = async (req, res, vendor, round, files) => {
+    const body = req.body || {};
+    const parsed = kycService.validateCorrection(body, files, vendor, round);
+    if (parsed.problems.length) {
+        return res.status(400).json({
+            success: false,
+            message: 'Please correct the highlighted fields',
+            errors: parsed.problems,
+        });
+    }
+
+    if (files.length && !isConfigured) {
+        return res.status(503).json({
+            success: false,
+            message: 'Document upload is temporarily unavailable. Please try again later or contact your OmTrax representative.',
+        });
+    }
+
+    let uploaded;
+    try {
+        uploaded = await kycService.uploadKycDocuments(files, vendor._id);
+    } catch (err) {
+        return res.status(502).json({ success: false, message: err.message });
+    }
+
+    const { replaced } = kycService.applyCorrection(vendor, body, parsed, uploaded, round);
+    try {
+        await vendor.save();
+    } catch (err) {
+        // Nothing may point at the new files if the record was not saved
+        await Promise.all(uploaded.map((d) => destroy(d).catch(() => false)));
+        throw err;
+    }
+
+    // The superseded files are removed only now that nothing refers to them.
+    // Best-effort: a Cloudinary failure never undoes the vendor's submission.
+    await Promise.all(replaced.map((d) => destroy(d).catch(() => false)));
+
+    const corrected = parsed.selected.map((f) => f.label).join(', ');
+    // Same notification Finance already gets for a submission, marked as a correction
+    await notifyRoles(FINANCE_ROLES, {
+        type: 'vendor_kyc_submitted',
+        vendor: vendor._id,
+        companyName: vendor.companyName || vendor.vendorName,
+        salesPersonName: vendor.contactPerson || vendor.vendorName,
+        remark: `Correction resubmitted (round ${round.round}) • ${formConfig(vendor.kycType).label} • ${corrected}`,
+        department: 'finance',
+    });
+    try {
+        await Notification.create({
+            type: 'vendor_kyc_submitted',
+            vendor: vendor._id,
+            companyName: vendor.companyName || vendor.vendorName,
+            salesPersonName: vendor.contactPerson || vendor.vendorName,
+            remark: 'Correction resubmitted — awaiting Finance review',
+            forRole: 'admin',
+            department: 'finance',
+        });
+    } catch (err) {
+        console.error('KYC admin notification failed:', err.message);
+    }
+
+    return res.status(200).json({
+        success: true,
+        message: 'Thank you — your corrected details have been submitted and are now with our Finance team for review.',
+        data: {
+            vendorName: vendor.vendorName,
+            submittedAt: vendor.kycSubmittedAt,
+            correction: true,
+            corrected: parsed.selected.map((f) => f.label),
+            documents: uploaded.length,
+        },
+    });
+};
+
 // @desc    Vendor submits their KYC details, materials and documents
 // @route   POST /api/kyc/:token
 // @access  Public (multipart/form-data)
 exports.submitKyc = async (req, res) => {
     try {
-        const { vendor, error, reason } = await kycService.resolveToken(req.params.token);
+        const { vendor, error, reason, correction } = await kycService.resolveToken(req.params.token);
         if (error) {
             return res.status(reason === 'already_submitted' ? 409 : 410).json({ success: false, message: error });
         }
 
         const files = req.files || [];
+
+        // A Correction KYC Link resubmits only what was selected for correction
+        if (correction) return submitCorrection(req, res, vendor, correction, files);
 
         // --- Validate everything before touching Cloudinary or Mongo ---
         // The form type comes from the vendor's own record, never from the

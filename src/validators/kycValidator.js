@@ -20,39 +20,45 @@ const {
 const clean = (v) => String(v ?? '').trim();
 
 /**
- * Validate the text fields of a KYC submission.
- * @returns {string[]} human-readable problems; empty means valid
+ * The rule for each text field of a KYC submission, in the order the problems
+ * are reported. Keyed by form field so a correction — which resubmits only some
+ * fields — can apply exactly the rules for those fields and no others.
  */
-const validateKycFields = (body = {}) => {
-    const problems = [];
-
+const FIELD_RULES = [
     // --- Vendor information ---
-    if (!clean(body.vendorName)) problems.push('Legal Name (as per PAN) is required');
-    if (!clean(body.companyName)) problems.push('Vendor Company Name is required');
-    if (!clean(body.address)) problems.push('Company address is required');
-
-    const email = clean(body.email);
-    if (!email) problems.push('Email ID is required');
-    else if (!EMAIL_RX.test(email)) problems.push('Enter a valid email address');
-
-    const phone = clean(body.phone).replace(/\D/g, '');
-    if (!phone) problems.push('Phone number is required');
-    else if (!PHONE_RX.test(phone)) problems.push('Phone number must be 10 digits');
-
+    ['vendorName', (body) => (clean(body.vendorName) ? [] : ['Legal Name (as per PAN) is required'])],
+    ['companyName', (body) => (clean(body.companyName) ? [] : ['Vendor Company Name is required'])],
+    ['address', (body) => (clean(body.address) ? [] : ['Company address is required'])],
+    ['email', (body) => {
+        const email = clean(body.email);
+        if (!email) return ['Email ID is required'];
+        return EMAIL_RX.test(email) ? [] : ['Enter a valid email address'];
+    }],
+    ['phone', (body) => {
+        const phone = clean(body.phone).replace(/\D/g, '');
+        if (!phone) return ['Phone number is required'];
+        return PHONE_RX.test(phone) ? [] : ['Phone number must be 10 digits'];
+    }],
     // Either a valid GST number, or URP for a vendor who is not GST registered
-    const gst = clean(body.gstNumber).toUpperCase();
-    if (!gst) problems.push(`GST Number / URP is required — enter your GST number, or ${URP_VALUE} if you are not GST registered`);
-    else if (!isUrp(gst) && !GST_RX.test(gst)) {
-        problems.push(`Enter a valid GST number (e.g. 07AABCU9603R1ZM), or ${URP_VALUE} if you are not GST registered`);
-    }
-
-    const pan = clean(body.panNumber).toUpperCase();
-    if (!pan) problems.push('PAN card number is required');
-    else if (!PAN_RX.test(pan)) problems.push('PAN format looks incorrect (e.g. ABCDE1234F)');
+    ['gstNumber', (body) => {
+        const gst = clean(body.gstNumber).toUpperCase();
+        if (!gst) return [`GST Number / URP is required — enter your GST number, or ${URP_VALUE} if you are not GST registered`];
+        if (!isUrp(gst) && !GST_RX.test(gst)) {
+            return [`Enter a valid GST number (e.g. 07AABCU9603R1ZM), or ${URP_VALUE} if you are not GST registered`];
+        }
+        return [];
+    }],
+    ['panNumber', (body) => {
+        const pan = clean(body.panNumber).toUpperCase();
+        if (!pan) return ['PAN card number is required'];
+        return PAN_RX.test(pan) ? [] : ['PAN format looks incorrect (e.g. ABCDE1234F)'];
+    }],
 
     // --- Banking (optional here, but validated when supplied) ---
-    const ifsc = clean(body.ifscCode).toUpperCase();
-    if (ifsc && !IFSC_RX.test(ifsc)) problems.push('IFSC code format looks incorrect (e.g. HDFC0001234)');
+    ['ifscCode', (body) => {
+        const ifsc = clean(body.ifscCode).toUpperCase();
+        return ifsc && !IFSC_RX.test(ifsc) ? ['IFSC code format looks incorrect (e.g. HDFC0001234)'] : [];
+    }],
 
     // --- Optional statutory details -----------------------------------------
     // ESI, PF, Shop Establishment and IEC are free-format across registrars, so
@@ -60,28 +66,46 @@ const validateKycFields = (body = {}) => {
     // from dropdowns, so an off-list value means a hand-crafted request.
     // Legacy single-value field. New clients send serviceLocations instead,
     // which parseServiceLocations validates.
-    const location = clean(body.serviceLocation);
-    if (location && !isIndianState(location)) {
-        problems.push('Select a Service Location from the list of Indian States and Union Territories');
-    }
-
-    const size = clean(body.companySize);
-    if (size && !COMPANY_SIZES.includes(size)) problems.push('Select a Company Size from the list');
-
-    [['esiNumber', 'ESI Number'], ['pfNumber', 'PF Number'],
-        ['shopEstablishmentNumber', 'Shop Establishment Number']].forEach(([f, label]) => {
-        if (clean(body[f]).length > 40) problems.push(`${label} is too long`);
-    });
+    ['serviceLocation', (body) => {
+        const location = clean(body.serviceLocation);
+        return location && !isIndianState(location)
+            ? ['Select a Service Location from the list of Indian States and Union Territories']
+            : [];
+    }],
+    ['companySize', (body) => {
+        const size = clean(body.companySize);
+        return size && !COMPANY_SIZES.includes(size) ? ['Select a Company Size from the list'] : [];
+    }],
+    ...[['esiNumber', 'ESI Number'], ['pfNumber', 'PF Number'],
+        ['shopEstablishmentNumber', 'Shop Establishment Number']].map(([f, label]) => (
+        [f, (body) => (clean(body[f]).length > 40 ? [`${label} is too long`] : [])]
+    )),
 
     // Operations only, but harmless to validate whenever it is supplied
-    const vehicles = clean(body.numberOfVehicles);
-    if (vehicles) {
+    ['numberOfVehicles', (body) => {
+        const vehicles = clean(body.numberOfVehicles);
+        if (!vehicles) return [];
         const n = Number(vehicles);
-        if (!Number.isInteger(n) || n < 0) problems.push('Number of Vehicles must be a whole number');
-        else if (n > 100000) problems.push('Number of Vehicles looks too large');
-    }
+        if (!Number.isInteger(n) || n < 0) return ['Number of Vehicles must be a whole number'];
+        if (n > 100000) return ['Number of Vehicles looks too large'];
+        return [];
+    }],
+];
 
-    return problems;
+/**
+ * Validate the text fields of a KYC submission.
+ * @returns {string[]} human-readable problems; empty means valid
+ */
+const validateKycFields = (body = {}) => FIELD_RULES.flatMap(([, rule]) => rule(body));
+
+/**
+ * The same rules, applied only to the named fields — for a correction, which
+ * resubmits a chosen subset of the form.
+ * @returns {string[]} problems
+ */
+const validateKycFieldsFor = (body = {}, fields = []) => {
+    const wanted = new Set(fields);
+    return FIELD_RULES.filter(([field]) => wanted.has(field)).flatMap(([, rule]) => rule(body));
 };
 
 /**
@@ -403,7 +427,7 @@ const validateFiles = (files = [], kycType) => {
 };
 
 module.exports = {
-    validateKycFields, parseMaterials, parseServices, parseOtherStateGst,
+    validateKycFields, validateKycFieldsFor, parseMaterials, parseServices, parseOtherStateGst,
     parseServiceLocations,
     validateRequiredDocuments, validateFile, validateFiles, clean,
 };
