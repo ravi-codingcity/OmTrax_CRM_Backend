@@ -100,10 +100,17 @@ const vendorSchema = new mongoose.Schema({
         trim: true,
         index: true
     },
-    // True while `vendorName` holds the internally generated "Awaiting KYC ..."
-    // placeholder. The vendor must never be shown it — their KYC form keeps the
-    // name field blank, and their submitted name clears this flag.
+    // True while `vendorName` holds a temporary, internal name: the one the
+    // team entered when generating the KYC link (or, on links generated before
+    // that step existed, an "Awaiting KYC ..." id). The vendor is never shown
+    // it — their KYC form keeps the name field blank — and the Legal Name they
+    // submit replaces it and clears this flag.
     nameIsPlaceholder: { type: Boolean, default: false },
+    // The vendor name the Purchase / Operations team entered when generating
+    // the KYC link. Kept after the vendor's submitted name replaces
+    // `vendorName`, so the request can still be traced to what the team
+    // called it. Empty on vendors added manually or linked before this existed.
+    kycRequestName: { type: String, trim: true, maxlength: 150 },
     companyName: { type: String, trim: true },
     contactPerson: { type: String, trim: true },
     email: { type: String, trim: true, lowercase: true },
@@ -126,6 +133,7 @@ const vendorSchema = new mongoose.Schema({
     esiNumber: { type: String, trim: true },
     pfNumber: { type: String, trim: true },
     shopEstablishmentNumber: { type: String, trim: true },
+    // No longer collected on either form; kept so existing records keep theirs
     iecCode: { type: String, trim: true, uppercase: true },
     companySize: { type: String, trim: true },
     // Where the vendor provides services: many states, each with optional
@@ -172,6 +180,11 @@ const vendorSchema = new mongoose.Schema({
     // Secure single-vendor token behind the public KYC form URL.
     // Sparse so many vendors can sit at null without violating uniqueness.
     kycToken: { type: String, trim: true, unique: true, sparse: true, index: true },
+    // The exact public URL that was shared with the vendor. Stored rather than
+    // rebuilt on demand so the link survives a change of PUBLIC_APP_URL, and so
+    // it can be copied again later by anyone authorised — the token itself is
+    // never returned by the API.
+    kycLinkUrl: { type: String, trim: true },
     kycTokenGeneratedAt: { type: Date },
     kycTokenExpiresAt: { type: Date },
     kycLinkSentAt: { type: Date },
@@ -251,7 +264,12 @@ vendorSchema.methods.logKyc = function (action, actor, extra = {}) {
 // Never expose the raw token or full bank account number in list payloads.
 vendorSchema.methods.toSafeJSON = function () {
     const v = this.toObject();
+    // The token is the credential for the public form and is never returned.
+    // `hasKycLink` lets the UI offer "Copy KYC Link" without it; the link
+    // itself comes from GET /api/vendors/:id/kyc-link, which checks permission.
+    v.hasKycLink = !!(v.kycLinkUrl || v.kycToken);
     delete v.kycToken;
+    delete v.kycLinkUrl;
     return v;
 };
 

@@ -3,20 +3,59 @@ const mongoose = require('mongoose');
 /**
  * Rate Comparison — the step that sits BEFORE a Purchase Order.
  *
- * The Purchase Team collects quotations from several vendors for one material,
- * compares them, nominates a vendor, and submits the comparison to the Director
- * for approval. Only once approved can it be turned into a PO.
+ * The Purchase Team collects quotations from several vendors for one or more
+ * items, compares them item by item, nominates a vendor, and submits the
+ * comparison to the Director for approval. Only once approved can it be turned
+ * into a PO.
  *
  *   Requirement -> Quotations -> Comparison -> Director -> Approved -> PO
+ *
+ * Shape
+ *   items[]          what is being bought (name, quantity, unit)
+ *   quotations[]     one per vendor
+ *     lines[]        that vendor's quote for each item, linked by items[]._id
+ *
+ * Comparisons created before multi-item support hold a single material in
+ * materialName / requiredQuantity / unit and the quote directly on each
+ * quotation (quotedRate, taxPercent, ...), with no items[] or lines[]. They are
+ * left exactly as stored; services/rateComparisonService.js presents them in the
+ * items/lines shape, and they take that shape when next saved.
  */
+
+// One item being compared
+const comparisonItemSchema = new mongoose.Schema({
+    itemName: { type: String, required: [true, 'Item name is required'], trim: true },
+    requiredQuantity: { type: Number, required: [true, 'Required quantity is required'], min: 0 },
+    unit: { type: String, trim: true },
+}, { _id: true });
+
+// One vendor's quote for one item. Amounts are recomputed by the pre-save hook.
+const quotationLineSchema = new mongoose.Schema({
+    item: { type: mongoose.Schema.Types.ObjectId, required: true },   // items[]._id
+    itemName: { type: String, trim: true },                            // snapshot, kept in step on save
+    quotedRate: { type: Number, required: true, min: 0 },
+    taxPercent: { type: Number, default: 0, min: 0 },
+    deliveryTime: { type: String, trim: true },
+    paymentTerms: { type: String, trim: true },
+    baseAmount: { type: Number, default: 0, min: 0 },
+    taxAmount: { type: Number, default: 0, min: 0 },
+    totalAmount: { type: Number, default: 0, min: 0 },
+}, { _id: true });
 
 // One vendor's quotation within a comparison.
 const quotationSchema = new mongoose.Schema({
     vendor: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor', required: true },
     vendorName: { type: String, trim: true },
 
-    // Commercials — amounts are recomputed by the parent's pre-save hook
-    quotedRate: { type: Number, required: true, min: 0 },
+    // Per-item quotes. No default, so saving a legacy comparison does not add
+    // an empty array to it.
+    lines: { type: [quotationLineSchema], default: undefined },
+
+    // Commercials. With items[] these are derived from `lines` on save: the
+    // amounts are the vendor's totals across every item quoted, and rate / GST /
+    // delivery / payment summarise the lines. On a legacy single-material
+    // comparison they are the quote itself.
+    quotedRate: { type: Number, min: 0 },
     taxPercent: { type: Number, default: 0, min: 0 },
     deliveryCharges: { type: Number, default: 0, min: 0 },
     baseAmount: { type: Number, default: 0, min: 0 },
@@ -61,12 +100,21 @@ const rateComparisonSchema = new mongoose.Schema({
         immutable: true,
         index: true
     },
-    comparisonDate: { type: Date, default: Date.now, index: true },
+    // Assigned by the server when the comparison is created. Never read from a
+    // request, and immutable, so it cannot be changed afterwards.
+    comparisonDate: { type: Date, default: Date.now, immutable: true, index: true },
 
     // --- What is being purchased ---
+    // No default, so a legacy comparison stays exactly as stored until edited
+    items: { type: [comparisonItemSchema], default: undefined },
+
+    // Summary of the items, kept in step on save so lists, notifications and
+    // search read the same on every comparison. One item fills all three
+    // exactly; several give "First item + N more items" and leave quantity and
+    // unit empty, since each item carries its own.
     materialName: { type: String, required: [true, 'Material name is required'], trim: true, index: true },
     materialDescription: { type: String, trim: true },
-    requiredQuantity: { type: Number, required: [true, 'Required quantity is required'], min: 0 },
+    requiredQuantity: { type: Number, min: 0 },
     unit: { type: String, trim: true },
 
     // --- Vendor quotations (2 or more expected before submission) ---
@@ -117,20 +165,69 @@ const rateComparisonSchema = new mongoose.Schema({
 
 rateComparisonSchema.index({ status: 1, createdAt: -1 });
 rateComparisonSchema.index({ selectedVendor: 1 });
+rateComparisonSchema.index({ 'items.itemName': 1 });
+
+const money = (n) => +(Number(n) || 0).toFixed(2);
+
+// Distinct non-empty values, in first-seen order, joined for a summary field
+const summarise = (values) => [...new Set(values.map((v) => String(v || '').trim()).filter(Boolean))].join('; ');
 
 /**
- * Recompute every quotation's amounts, and keep the selected-vendor snapshot in
- * step with whichever quotation is flagged. Amounts can therefore never drift
- * from the rates that were entered.
+ * Recompute every quotation's amounts, and keep the summary fields and the
+ * selected-vendor snapshot in step. Amounts can therefore never drift from the
+ * rates that were entered.
  */
-rateComparisonSchema.pre('save', function (next) {
-    const qty = Number(this.requiredQuantity) || 0;
+// Runs before validation (which every save performs), so the derived summary
+// fields — materialName in particular — exist by the time they are validated.
+rateComparisonSchema.pre('validate', function (next) {
+    if (this.items && this.items.length) {
+        const byId = new Map(this.items.map((it) => [String(it._id), it]));
 
-    (this.quotations || []).forEach((q) => {
-        q.baseAmount = +((Number(q.quotedRate) || 0) * qty).toFixed(2);
-        q.taxAmount = +(q.baseAmount * (Number(q.taxPercent) || 0) / 100).toFixed(2);
-        q.totalAmount = +(q.baseAmount + q.taxAmount + (Number(q.deliveryCharges) || 0)).toFixed(2);
-    });
+        (this.quotations || []).forEach((q) => {
+            // A line for an item that is no longer on the comparison goes with it
+            q.lines = (q.lines || []).filter((l) => byId.has(String(l.item)));
+
+            let base = 0;
+            let tax = 0;
+            q.lines.forEach((l) => {
+                const it = byId.get(String(l.item));
+                l.itemName = it.itemName;
+                l.baseAmount = money((Number(l.quotedRate) || 0) * (Number(it.requiredQuantity) || 0));
+                l.taxAmount = money(l.baseAmount * (Number(l.taxPercent) || 0) / 100);
+                l.totalAmount = money(l.baseAmount + l.taxAmount);
+                base += l.baseAmount;
+                tax += l.taxAmount;
+            });
+
+            q.baseAmount = money(base);
+            q.taxAmount = money(tax);
+            q.deliveryCharges = 0;
+            q.totalAmount = money(base + tax);
+
+            const single = this.items.length === 1 && q.lines.length === 1 ? q.lines[0] : null;
+            const gst = [...new Set(q.lines.map((l) => Number(l.taxPercent) || 0))];
+            q.quotedRate = single ? single.quotedRate : undefined;
+            q.taxPercent = gst.length === 1 ? gst[0] : undefined;
+            q.deliveryTime = summarise(q.lines.map((l) => l.deliveryTime));
+            q.paymentTerms = summarise(q.lines.map((l) => l.paymentTerms));
+        });
+
+        const [first] = this.items;
+        const more = this.items.length - 1;
+        this.materialName = more
+            ? `${first.itemName} + ${more} more item${more === 1 ? '' : 's'}`
+            : first.itemName;
+        this.requiredQuantity = more ? undefined : first.requiredQuantity;
+        this.unit = more ? undefined : first.unit;
+    } else {
+        // Legacy single-material comparison, not yet converted
+        const qty = Number(this.requiredQuantity) || 0;
+        (this.quotations || []).forEach((q) => {
+            q.baseAmount = money((Number(q.quotedRate) || 0) * qty);
+            q.taxAmount = money(q.baseAmount * (Number(q.taxPercent) || 0) / 100);
+            q.totalAmount = money(q.baseAmount + q.taxAmount + (Number(q.deliveryCharges) || 0));
+        });
+    }
 
     const selected = (this.quotations || []).find((q) => q.isSelected);
     if (selected) {

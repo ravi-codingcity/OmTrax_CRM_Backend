@@ -27,7 +27,9 @@ router.route('/')
     .get(vendorController.getVendors)
     .post(vendorValidation, vendorController.createVendor);
 
-// KYC link management (Purchase Manager, Finance, Admin)
+// KYC link management (Purchase Manager, Operations, Finance, Admin)
+// GET returns the link already saved; POST mints a new one.
+router.get('/:id/kyc-link', vendorController.getSavedKycLink);
 router.post('/:id/kyc-link', vendorController.generateKycLink);
 router.post('/:id/kyc-link/sent', vendorController.markKycLinkSent);
 

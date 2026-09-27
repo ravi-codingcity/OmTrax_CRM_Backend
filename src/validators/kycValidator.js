@@ -13,7 +13,7 @@ const {
     allowedTypesFor, allowedExtensionsFor, allowedLabelFor,
     DOC_FIELD_TO_TYPE, OTHER_SERVICES, URP_VALUE, isUrp, requiredDocumentsFor,
     GST_RX, PAN_RX, IFSC_RX, EMAIL_RX, PHONE_RX,
-    isIndianState, COMPANY_SIZES, MAX_OTHER_STATE_GST,
+    isIndianState, COMPANY_SIZES, MAX_OTHER_STATE_GST, documentsForType,
     MAX_SERVICE_STATES, MAX_CITIES_PER_STATE, MAX_CITY_NAME_LENGTH,
 } = require('../constants/kycConstants');
 
@@ -67,9 +67,6 @@ const validateKycFields = (body = {}) => {
 
     const size = clean(body.companySize);
     if (size && !COMPANY_SIZES.includes(size)) problems.push('Select a Company Size from the list');
-
-    const iec = clean(body.iecCode);
-    if (iec && !/^[A-Z0-9]{6,15}$/i.test(iec)) problems.push('IEC Code format looks incorrect');
 
     [['esiNumber', 'ESI Number'], ['pfNumber', 'PF Number'],
         ['shopEstablishmentNumber', 'Shop Establishment Number']].forEach(([f, label]) => {
@@ -374,13 +371,18 @@ const validateFile = (file) => {
  * Validate the whole set of uploaded files.
  * @returns {string[]} problems
  */
-const validateFiles = (files = []) => {
+const validateFiles = (files = [], kycType) => {
     const problems = [];
 
     if (files.length > MAX_FILES) {
         problems.push(`Upload at most ${MAX_FILES} documents.`);
         return problems;
     }
+
+    // Only the slots THIS form offers are accepted. The TDS declaration, for
+    // example, belongs to Operations, so a Purchase submission carrying one is
+    // rejected rather than silently stored.
+    const offered = new Set(documentsForType(kycType).map((d) => d.field));
 
     const seenFields = new Set();
     files.forEach((file) => {
@@ -389,6 +391,8 @@ const validateFiles = (files = []) => {
 
         if (!DOC_FIELD_TO_TYPE[file.fieldname]) {
             problems.push(`"${file.fieldname}" is not a recognised document slot.`);
+        } else if (!offered.has(file.fieldname)) {
+            problems.push(`"${file.fieldname}" is not part of this KYC form.`);
         } else if (seenFields.has(file.fieldname)) {
             problems.push(`More than one file was sent for ${file.fieldname}.`);
         }

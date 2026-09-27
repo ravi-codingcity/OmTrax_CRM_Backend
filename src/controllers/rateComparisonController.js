@@ -51,14 +51,16 @@ const vendorNameMap = async (rows) => {
     return vendors.reduce((acc, v) => { acc[String(v._id)] = v.vendorName; return acc; }, {});
 };
 
-// `materialDescription` was removed from the Rate Comparison form. The schema
-// keeps it so existing comparisons retain their text, but it is no longer
-// writable from the UI.
-const EDITABLE = ['comparisonDate', 'materialName', 'requiredQuantity', 'unit', 'comparisonRemarks'];
+// Plain fields a request may change. Items and quotations go through
+// rcService.normaliseSubmission. `comparisonDate` is set by the server on
+// creation and `materialDescription` is no longer collected (the schema keeps
+// it so existing comparisons retain their text) — neither is writable.
+const EDITABLE = ['comparisonRemarks'];
 
-// Attach the derived comparison summary to a response
+// Every response carries the comparison in items/lines shape — legacy
+// single-material comparisons included — plus the derived summary.
 const decorate = (doc) => {
-    const obj = doc.toObject ? doc.toObject() : doc;
+    const obj = rcService.toItemView(doc);
     obj.summary = rcService.buildComparisonSummary(obj);
     obj.canEdit = rcService.canEdit(obj);
     return obj;
@@ -72,18 +74,20 @@ exports.createRateComparison = async (req, res) => {
         if (denyUnlessCanManage(req, res)) return;
 
         const nameMap = await vendorNameMap(req.body.quotations);
-        const quotations = rcService.normaliseQuotations(req.body.quotations, nameMap);
-        const problems = rcService.validateComparison(req.body, quotations, false);
+        const input = rcService.normaliseSubmission(req.body, null, nameMap);
+        if (input.error) return res.status(400).json({ success: false, message: input.error });
+        const items = input.items || [];
+        const quotations = input.quotations || [];
+        const problems = rcService.validateComparison(items, quotations, false);
         if (problems.length) {
             return res.status(400).json({ success: false, message: 'Please correct the highlighted fields', errors: problems });
         }
 
         const rc = new RateComparison({
             comparisonNumber: await RateComparison.nextComparisonNumber(),
-            comparisonDate: req.body.comparisonDate || new Date(),
-            materialName: req.body.materialName,
-            requiredQuantity: Number(req.body.requiredQuantity) || 0,
-            unit: req.body.unit,
+            // Always the server's clock — a date in the request is ignored
+            comparisonDate: new Date(),
+            items,
             quotations,
             comparisonRemarks: req.body.comparisonRemarks,
             status: 'draft',
@@ -91,7 +95,10 @@ exports.createRateComparison = async (req, res) => {
             createdBy: req.user.id,
             createdByName: req.user.name,
         });
-        rc.log('created', req.user, { toStatus: 'draft', remarks: `${quotations.length} quotation(s)` });
+        rc.log('created', req.user, {
+            toStatus: 'draft',
+            remarks: `${items.length} item(s), ${quotations.length} quotation(s)`,
+        });
         await rc.save();
 
         res.status(201).json({ success: true, message: 'Rate comparison created', data: decorate(rc) });
@@ -117,7 +124,7 @@ exports.getRateComparisons = async (req, res) => {
         if (search && search.trim()) {
             const rx = new RegExp(escapeRegex(search.trim()), 'i');
             filter.$or = [
-                { comparisonNumber: rx }, { materialName: rx },
+                { comparisonNumber: rx }, { materialName: rx }, { 'items.itemName': rx },
                 { selectedVendorName: rx }, { 'quotations.vendorName': rx },
             ];
         }
@@ -158,7 +165,7 @@ exports.getRateComparisonStats = async (req, res) => {
             RateComparison.aggregate([{ $match: base }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
             RateComparison.find({ ...base, status: 'pending_approval' })
                 .sort({ submittedAt: -1 }).limit(10)
-                .select('comparisonNumber materialName requiredQuantity unit selectedVendorName submittedByName submittedAt quotations'),
+                .select('comparisonNumber materialName requiredQuantity unit items selectedVendorName submittedByName submittedAt quotations'),
             RateComparison.find({ ...base, status: { $in: ['approved', 'rejected', 'sent_back'] } })
                 .sort({ 'directorReview.reviewedAt': -1 }).limit(10)
                 .select('comparisonNumber materialName status directorReview selectedVendorName'),
@@ -179,6 +186,7 @@ exports.getRateComparisonStats = async (req, res) => {
                     materialName: p.materialName,
                     requiredQuantity: p.requiredQuantity,
                     unit: p.unit,
+                    itemCount: rcService.toItemView(p).items.length,
                     selectedVendorName: p.selectedVendorName,
                     submittedByName: p.submittedByName,
                     submittedAt: p.submittedAt,
@@ -232,21 +240,24 @@ exports.updateRateComparison = async (req, res) => {
             });
         }
 
+        const nameMap = await vendorNameMap(req.body.quotations);
+        const input = rcService.normaliseSubmission(req.body, rc, nameMap);
+        if (input.error) return res.status(400).json({ success: false, message: input.error });
+
+        const next = input.touched ? input : rcService.toItemView(rc);
+        const problems = rcService.validateComparison(next.items, next.quotations, false);
+        if (problems.length) {
+            return res.status(400).json({ success: false, message: 'Please correct the highlighted fields', errors: problems });
+        }
+
         EDITABLE.forEach((f) => {
             if (req.body[f] !== undefined) rc[f] = req.body[f];
         });
-
-        if (req.body.quotations !== undefined) {
-            const nameMap = await vendorNameMap(req.body.quotations);
-            rc.quotations = rcService.normaliseQuotations(req.body.quotations, nameMap);
-        }
-
-        const problems = rcService.validateComparison(
-            { materialName: rc.materialName, requiredQuantity: rc.requiredQuantity },
-            rc.quotations, false
-        );
-        if (problems.length) {
-            return res.status(400).json({ success: false, message: 'Please correct the highlighted fields', errors: problems });
+        // Saving through the items/lines shape also converts a legacy
+        // single-material comparison; its PO link, history and approvals stay.
+        if (input.touched) {
+            rc.items = input.items;
+            rc.quotations = input.quotations;
         }
 
         rc.log('updated', req.user);
@@ -276,10 +287,8 @@ exports.submitForApproval = async (req, res) => {
             });
         }
 
-        const problems = rcService.validateComparison(
-            { materialName: rc.materialName, requiredQuantity: rc.requiredQuantity },
-            rc.quotations, true
-        );
+        const view = rcService.toItemView(rc);
+        const problems = rcService.validateComparison(view.items, view.quotations, true);
         if (problems.length) {
             return res.status(400).json({ success: false, message: 'This comparison is not ready to submit', errors: problems });
         }
@@ -307,7 +316,7 @@ exports.submitForApproval = async (req, res) => {
             companyName: `${rc.materialName} (${rc.comparisonNumber})`,
             salesPerson: req.user.id,
             salesPersonName: req.user.name,
-            remark: `${rc.quotations.length} vendor quotations • recommending ${rc.selectedVendorName || '—'}`,
+            remark: `${view.items.length} item${view.items.length === 1 ? '' : 's'} • ${rc.quotations.length} vendor quotations • recommending ${rc.selectedVendorName || '—'}`,
         });
 
         res.status(200).json({

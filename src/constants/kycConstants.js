@@ -39,8 +39,8 @@ const ALLOWED_MIME_TYPES = Object.keys(ALLOWED_TYPES);
 const ALLOWED_EXTENSIONS = [...new Set(Object.values(ALLOWED_TYPES).flatMap((t) => t.ext))];
 const ALLOWED_LABEL = 'JPG, JPEG, PDF, XLS or XLSX';
 
-// Maximum documents in one submission (11 slots + a little headroom)
-const MAX_FILES = 14;
+// Maximum documents in one submission (13 slots + a little headroom)
+const MAX_FILES = 16;
 
 // --- Document types --------------------------------------------------------
 
@@ -57,12 +57,16 @@ const KYC_DOCUMENTS = [
     // enters URP is not GST registered, so there is no certificate to give.
     { field: 'gstCertificate', docType: 'gst_certificate', label: 'GST Certificate', required: true, requiresGst: true },
     { field: 'cancelledCheque', docType: 'cancelled_cheque', label: 'Cancelled Cheque', required: true },
-    { field: 'incorporationCertificate', docType: 'incorporation_certificate', label: 'Incorporation Certificate (CIN)', required: false },
-    { field: 'aadhaarCard', docType: 'aadhaar_card', label: 'Aadhaar Card', required: false },
+    // One upload covers either proof of incorporation or the proprietor's
+    // Aadhaar, depending on how the vendor is constituted. Mandatory.
+    { field: 'cinAadhaar', docType: 'cin_aadhaar', label: 'CIN / Aadhaar Card', required: true },
     { field: 'msmeCertificate', docType: 'msme_certificate', label: 'MSME Certificate', required: false },
     { field: 'balanceSheet', docType: 'balance_sheet', label: 'Balance Sheet', required: false },
     { field: 'profitLoss', docType: 'profit_loss', label: 'Profit & Loss (P&L) Statement', required: false },
     { field: 'agreementUpload', docType: 'agreement', label: 'Agreement', required: false },
+    // PF and ESI are collected as documents rather than typed numbers
+    { field: 'pfDocument', docType: 'pf_document', label: 'PF Document', required: false },
+    { field: 'esiDocument', docType: 'esi_document', label: 'ESI Document', required: false },
     // Template documents: the vendor downloads a .docx, fills it in offline and
     // uploads the completed copy. Optional, and they also accept the standard
     // formats so a signed scan can be returned as a PDF or photo.
@@ -99,14 +103,28 @@ const allowedLabelFor = (field) =>
 // records that carry one still resolve a label and stay schema-valid via
 // DOC_TYPE_LABELS / DOC_TYPE_ENUM below.
 
+// Anything without a recognised type is treated as Purchase, matching the rest
+// of the codebase. Declared here because documentsForType runs before the
+// KYC_FORM_CONFIG block below.
+const DEFAULT_KYC_TYPE_FOR_DOCS = 'purchase';
+
 /**
- * Both KYC forms currently ask for the same documents. The two workflows differ
- * in their FIELDS, not their uploads (Purchase collects materials, Operations
- * collects services and a vehicle count) — see KYC_FORM_CONFIG.
+ * The documents a given form asks for.
  *
- * Kept as a function so a future form can diverge without touching callers.
+ * The TDS declaration is a transporter document, so it belongs to the
+ * Operations workflow only — the Purchase form does not offer it.
  */
-const documentsForType = () => KYC_DOCUMENTS;
+const DOCS_EXCLUDED_BY_TYPE = {
+    purchase: ['tdsDeclaration'],
+    operations: [],
+};
+
+const documentsForType = (kycType) => {
+    const excluded = DOCS_EXCLUDED_BY_TYPE[kycType]
+        || DOCS_EXCLUDED_BY_TYPE[DEFAULT_KYC_TYPE_FOR_DOCS];
+    if (!excluded.length) return KYC_DOCUMENTS;
+    return KYC_DOCUMENTS.filter((d) => !excluded.includes(d.field));
+};
 
 /**
  * Which documents a submission must carry, given what was entered for GST and
@@ -139,14 +157,22 @@ const DOC_TYPE_LABELS = KYC_DOCUMENTS.reduce((acc, d) => {
     msme_certificate: 'MSME / Udyam Certificate',
     // No longer collected on either form, but old submissions still carry one
     company_registration: 'Company Registration Document',
+    pf_document: 'PF Document',
+    esi_document: 'ESI Document',
+    // Collected separately before they were combined into cin_aadhaar
+    aadhaar_card: 'Aadhaar Card',
     other: 'Other Document',
 });
 
 // Schema enum: current types plus every legacy value, so old rows stay valid.
 const DOC_TYPE_ENUM = [...new Set([
     ...KYC_DOCUMENTS.map((d) => d.docType),
-    'bank_statement', 'incorporation_certificate', 'company_registration', 'other',
+    'bank_statement', 'incorporation_certificate', 'company_registration',
+    'aadhaar_card', 'other',
 ])];
+
+// The service whose presence reveals the vehicle count on the Operations form
+const VEHICLE_SERVICE = 'Transportation';
 
 // --- KYC workflow ----------------------------------------------------------
 
@@ -274,6 +300,7 @@ module.exports = {
     COMPANY_SIZES,
     MAX_OTHER_STATE_GST,
     KYC_FORM_CONFIG,
+    VEHICLE_SERVICE,
     KYC_TYPES,
     DEFAULT_KYC_TYPE,
     isValidKycType,

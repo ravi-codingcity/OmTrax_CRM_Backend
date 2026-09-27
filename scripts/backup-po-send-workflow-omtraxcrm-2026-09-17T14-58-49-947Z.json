@@ -1,0 +1,311 @@
+{
+  "purchaseorders": [
+    {
+      "_id": "6a87057fb33d0eac019fc528",
+      "poNumber": "PO/2026-27/0001",
+      "poDate": "2026-08-20T00:00:00.000Z",
+      "vendor": "6a86fdebb33d0eac019fc220",
+      "vendorName": "Testing1",
+      "vendorEmail": "test@gmail.com",
+      "vendorGst": "07AABCU9603R1ZM",
+      "items": [
+        {
+          "itemName": "Hammer",
+          "description": "",
+          "quantity": 20,
+          "unit": "Kg",
+          "rate": 52,
+          "amount": 1040,
+          "_id": "6a87057fb33d0eac019fc529"
+        },
+        {
+          "itemName": "A4 Paper",
+          "description": "",
+          "quantity": 20,
+          "unit": "Box",
+          "rate": 120,
+          "amount": 2400,
+          "_id": "6a87057fb33d0eac019fc52a"
+        }
+      ],
+      "subTotal": 3440,
+      "taxPercent": 18,
+      "taxAmount": 619.2,
+      "discount": 0,
+      "totalAmount": 4059.2,
+      "deliveryLocation": "Gurugram",
+      "expectedDeliveryDate": "2026-08-28T00:00:00.000Z",
+      "paymentTerms": "20 Days",
+      "notes": "Tetting",
+      "termsAndConditions": "Testing Terms",
+      "status": "completed",
+      "sentMethod": "email",
+      "department": "purchase",
+      "createdBy": "69872b6b67bf728d84470487",
+      "createdByName": "Ravi",
+      "isActive": true,
+      "activity": [
+        {
+          "action": "created",
+          "at": "2026-08-20T13:47:43.254Z",
+          "byUser": "69872b6b67bf728d84470487",
+          "byName": "Ravi",
+          "byRole": "admin",
+          "note": "PO raised for Testing1"
+        },
+        {
+          "action": "generated",
+          "at": "2026-08-20T13:47:43.255Z",
+          "byUser": "69872b6b67bf728d84470487",
+          "byName": "Ravi",
+          "byRole": "admin"
+        },
+        {
+          "action": "sent",
+          "at": "2026-08-20T13:47:56.739Z",
+          "byUser": "69872b6b67bf728d84470487",
+          "byName": "Ravi",
+          "byRole": "admin"
+        },
+        {
+          "action": "acknowledged",
+          "at": "2026-08-20T13:50:16.970Z",
+          "byUser": "69872b6b67bf728d84470487",
+          "byName": "Ravi",
+          "byRole": "admin"
+        },
+        {
+          "action": "completed",
+          "at": "2026-08-20T13:52:46.162Z",
+          "byUser": "69872b6b67bf728d84470487",
+          "byName": "Ravi",
+          "byRole": "admin"
+        }
+      ],
+      "createdAt": "2026-08-20T13:47:43.257Z",
+      "updatedAt": "2026-08-20T13:52:46.164Z",
+      "__v": 3,
+      "sentAt": "2026-08-20T13:47:56.738Z",
+      "sentBy": "69872b6b67bf728d84470487",
+      "sentByName": "Ravi",
+      "sentTo": "test@gmail.com"
+    },
+    {
+      "_id": "6a8710f8c65b560917c88a4c",
+      "poNumber": "PO/2026-27/0002",
+      "poDate": "2026-08-20T00:00:00.000Z",
+      "vendor": "6a86fdebb33d0eac019fc220",
+      "vendorName": "Testing1",
+      "vendorEmail": "test@gmail.com",
+      "vendorGst": "07AABCU9603R1ZM",
+      "rateComparison": "6a870866b33d0eac019fc6bf",
+      "rateComparisonNumber": "RC/2026-27/0001",
+      "items": [
+        {
+          "itemName": "A4 Paper",
+          "description": "White Paper",
+          "quantity": 20,
+          "unit": "Box",
+          "rate": 10,
+          "amount": 200,
+          "_id": "6a8710f8c65b560917c88a4d"
+        }
+      ],
+      "subTotal": 200,
+      "taxPercent": 18,
+      "taxAmount": 36,
+      "discount": 0,
+      "totalAmount": 236,
+      "deliveryLocation": "",
+      "paymentTerms": "20 days",
+      "notes": "",
+      "termsAndConditions": "Quality should be best",
+      "status": "sent",
+      "sentMethod": "email",
+      "department": "purchase",
+      "createdBy": "69872b6b67bf728d84470487",
+      "createdByName": "Ravi",
+      "isActive": false,
+      "activity": [
+        {
+          "action": "created",
+          "at": "2026-08-20T14:36:40.405Z",
+          "byUser": "69872b6b67bf728d84470487",
+          "byName": "Ravi",
+          "byRole": "admin",
+          "note": "PO raised for Testing1"
+        },
+        {
+          "action": "generated",
+          "at": "2026-08-20T14:36:40.406Z",
+          "byUser": "69872b6b67bf728d84470487",
+          "byName": "Ravi",
+          "byRole": "admin"
+        },
+        {
+          "action": "sent",
+          "at": "2026-08-21T10:50:49.088Z",
+          "byUser": "69857587d7049700d84b0871",
+          "byName": "Nimit",
+          "byRole": "director"
+        }
+      ],
+      "createdAt": "2026-08-20T14:36:40.407Z",
+      "updatedAt": "2026-08-26T06:18:13.673Z",
+      "__v": 1,
+      "sentAt": "2026-08-21T10:50:49.088Z",
+      "sentBy": "69857587d7049700d84b0871",
+      "sentByName": "Nimit",
+      "sentTo": "test@gmail.com",
+      "terms": []
+    },
+    {
+      "_id": "6a8e84eaf25404db6632fa1e",
+      "poNumber": "PO/2026-27/0003",
+      "poDate": "2026-08-26T00:00:00.000Z",
+      "vendor": "6a86fdebb33d0eac019fc220",
+      "vendorName": "Testing1",
+      "vendorEmail": "test@gmail.com",
+      "vendorGst": "07AABCU9603R1ZM",
+      "items": [
+        {
+          "itemName": "A4 Paper",
+          "quantity": 100,
+          "unit": "Packet",
+          "rate": 450,
+          "amount": 45000,
+          "_id": "6a8e84eaf25404db6632fa1f"
+        }
+      ],
+      "subTotal": 45000,
+      "taxPercent": 5,
+      "taxAmount": 2250,
+      "discount": 0,
+      "totalAmount": 47250,
+      "deliveryLocation": "Gurugram",
+      "paymentTerms": "45 days",
+      "terms": [],
+      "status": "generated",
+      "sentMethod": null,
+      "department": "purchase",
+      "createdBy": "69857587d7049700d84b0871",
+      "createdByName": "Nimit",
+      "isActive": false,
+      "activity": [
+        {
+          "action": "created",
+          "at": "2026-08-26T06:17:14.857Z",
+          "byUser": "69857587d7049700d84b0871",
+          "byName": "Nimit",
+          "byRole": "director",
+          "note": "PO raised for Testing1"
+        },
+        {
+          "action": "generated",
+          "at": "2026-08-26T06:17:14.857Z",
+          "byUser": "69857587d7049700d84b0871",
+          "byName": "Nimit",
+          "byRole": "director"
+        }
+      ],
+      "createdAt": "2026-08-26T06:17:14.859Z",
+      "updatedAt": "2026-08-26T06:18:10.862Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa7fd3e644ccd5efd43e420",
+      "poNumber": "PO/2026-27/0004",
+      "poDate": "2026-09-14T00:00:00.000Z",
+      "vendor": "6aa3ed89861df75e9658d4ff",
+      "vendorName": "DCG TECH LIMITED",
+      "vendorEmail": "priya.kapoor@dcgpac.com",
+      "vendorGst": "06AACCD4379E1ZR",
+      "items": [
+        {
+          "itemName": "A4 Paper",
+          "quantity": 10,
+          "unit": "Box",
+          "rate": 350,
+          "amount": 3500,
+          "_id": "6aa80f41883c6a932c4a9542"
+        },
+        {
+          "itemName": "Air Bubble Roll – 50 GSM, 1 Meter Width × 100 Meter Roll",
+          "quantity": 5,
+          "unit": "Piece",
+          "rate": 425,
+          "amount": 2125,
+          "_id": "6aa80f41883c6a932c4a9543"
+        },
+        {
+          "itemName": "C V ROLL",
+          "quantity": 15,
+          "unit": "Roll",
+          "rate": 100,
+          "amount": 1500,
+          "_id": "6aa80f41883c6a932c4a9544"
+        }
+      ],
+      "subTotal": 7125,
+      "taxPercent": 18,
+      "taxAmount": 1282.5,
+      "discount": 0,
+      "totalAmount": 8407.5,
+      "deliveryLocation": "Delhi HO",
+      "paymentTerms": "20 Days",
+      "terms": [
+        "this is my terms and condition",
+        "type 2 of terms of condition",
+        "saved or not for future reference"
+      ],
+      "status": "generated",
+      "sentMethod": "email",
+      "department": "purchase",
+      "createdBy": "69872b6b67bf728d84470487",
+      "createdByName": "Ravi",
+      "isActive": true,
+      "activity": [
+        {
+          "action": "created",
+          "at": "2026-09-14T13:57:18.628Z",
+          "byUser": "69872b6b67bf728d84470487",
+          "byName": "Ravi",
+          "byRole": "admin",
+          "note": "PO raised for DCG TECH LIMITED"
+        },
+        {
+          "action": "generated",
+          "at": "2026-09-14T13:57:18.629Z",
+          "byUser": "69872b6b67bf728d84470487",
+          "byName": "Ravi",
+          "byRole": "admin"
+        },
+        {
+          "action": "sent",
+          "at": "2026-09-14T13:57:45.242Z",
+          "byUser": "69872b6b67bf728d84470487",
+          "byName": "Ravi",
+          "byRole": "admin"
+        },
+        {
+          "action": "updated",
+          "at": "2026-09-14T15:14:09.906Z",
+          "byUser": "69872b6b67bf728d84470487",
+          "byName": "Ravi",
+          "byRole": "admin",
+          "note": "Edited items"
+        }
+      ],
+      "createdAt": "2026-09-14T13:57:18.635Z",
+      "updatedAt": "2026-09-14T15:14:09.918Z",
+      "__v": 2,
+      "sentAt": "2026-09-14T13:57:45.241Z",
+      "sentBy": "69872b6b67bf728d84470487",
+      "sentByName": "Ravi",
+      "sentTo": "priya.kapoor@dcgpac.com",
+      "lastEditedAt": "2026-09-14T15:14:09.906Z",
+      "lastEditedBy": "69872b6b67bf728d84470487",
+      "lastEditedByName": "Ravi"
+    }
+  ]
+}

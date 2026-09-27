@@ -12,7 +12,9 @@ const notificationSchema = new mongoose.Schema({
             // Vendor KYC workflow (Purchase <-> Finance)
             'vendor_kyc_submitted', 'vendor_kyc_approved', 'vendor_kyc_rejected',
             'vendor_kyc_link_sent',
-            // Purchase Orders
+            // Purchase Orders. 'po_sent' is no longer created — POs are sent
+            // outside the CRM — but stays valid so notifications recorded
+            // before that change can still be read and marked as read.
             'po_created', 'po_sent',
             // Rate Comparison approval workflow (Purchase <-> Director)
             'rate_comparison_submitted', 'rate_comparison_approved',
@@ -192,10 +194,6 @@ notificationSchema.pre('save', function(next) {
             case 'po_created':
                 this.title = 'Purchase Order Created';
                 this.message = this.message || `PO created for ${this.companyName}`;
-                break;
-            case 'po_sent':
-                this.title = 'Purchase Order Sent';
-                this.message = this.message || `PO sent to ${this.companyName}`;
                 break;
             case 'rate_comparison_submitted':
                 this.title = 'Rate Comparison Awaiting Approval';

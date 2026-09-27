@@ -11,7 +11,9 @@ const {
     validateKycFields, parseMaterials, parseServices, parseOtherStateGst,
     parseServiceLocations, validateRequiredDocuments, validateFiles, clean,
 } = require('../validators/kycValidator');
-const { DOC_FIELD_TO_TYPE, DOC_TYPE_LABELS, formConfig } = require('../constants/kycConstants');
+const {
+    DOC_FIELD_TO_TYPE, DOC_TYPE_LABELS, formConfig, VEHICLE_SERVICE,
+} = require('../constants/kycConstants');
 
 /**
  * Look up the vendor behind a KYC token and decide whether the form is usable.
@@ -118,8 +120,9 @@ const VENDOR_WRITABLE = [
     'gstNumber', 'panNumber',
     'bankName', 'accountHolderName', 'accountNumber', 'ifscCode',
     'kycAdditionalInfo',
-    // Optional statutory details, collected on both forms
-    'esiNumber', 'pfNumber', 'shopEstablishmentNumber', 'iecCode',
+    // Optional statutory details, collected on both forms.
+    // `iecCode` is no longer collected; the schema keeps existing values.
+    'esiNumber', 'pfNumber', 'shopEstablishmentNumber',
     'companySize', 'serviceLocation',
 ];
 
@@ -138,7 +141,7 @@ const validateSubmission = (body, files, kycType) => {
 
     const problems = [
         ...validateKycFields(body),
-        ...validateFiles(files),
+        ...validateFiles(files, config.kycType),
         // Enforced here as well as in the browser, so a direct API call cannot
         // skip a mandatory document.
         ...validateRequiredDocuments(body, files, config.kycType),
@@ -161,6 +164,12 @@ const validateSubmission = (body, files, kycType) => {
         problems.push('Select at least one material you supply');
     } else if (config.collectsServices && !keptServices.length) {
         problems.push('Select at least one service you provide');
+    }
+
+    // At least one state must be named on both forms. Cities stay optional —
+    // a vendor covering a whole state names no city.
+    if (!serviceLocations.length) {
+        problems.push('Add at least one Service Location (State / UT)');
     }
 
     return {
@@ -196,7 +205,6 @@ const applySubmission = (vendor, body, materials, uploadedDocs, services = [], o
     vendor.gstNumber = clean(body.gstNumber).toUpperCase();
     vendor.panNumber = clean(body.panNumber).toUpperCase();
     if (body.ifscCode) vendor.ifscCode = clean(body.ifscCode).toUpperCase();
-    if (body.iecCode) vendor.iecCode = clean(body.iecCode).toUpperCase();
     vendor.phone = clean(body.phone).replace(/\D/g, '');
 
     // Replace wholesale — the form is the source of truth
@@ -208,18 +216,29 @@ const applySubmission = (vendor, body, materials, uploadedDocs, services = [], o
     // it was so an older record keeps the value it already had.
     vendor.serviceLocations = serviceLocations;
 
-    // Operations only. Left untouched on a Purchase submission so a value
-    // recorded elsewhere is never silently cleared.
-    if (config.collectsVehicles && clean(body.numberOfVehicles)) {
-        vendor.numberOfVehicles = Number(clean(body.numberOfVehicles));
+    // Operations only, and only when the vendor actually offers Transportation
+    // — the field is hidden otherwise, so a stale value must not be kept.
+    // Left untouched on a Purchase submission, where the field does not exist.
+    if (config.collectsVehicles) {
+        const transports = services.some((sv) => sv.serviceName === VEHICLE_SERVICE);
+        if (!transports) vendor.numberOfVehicles = undefined;
+        else if (clean(body.numberOfVehicles)) {
+            vendor.numberOfVehicles = Number(clean(body.numberOfVehicles));
+        }
     }
 
     // PF and ESI sit behind "do you have one?" checkboxes. When the vendor says
     // no, the number is cleared here rather than trusted from the body — a
     // direct API call cannot answer "no" and still store a number.
     const saidNo = (v) => v === false || ['false', '0', 'no', 'off'].includes(String(v ?? '').trim().toLowerCase());
+    // PF and ESI are now collected as documents; these two only matter for a
+    // client still sending the old numeric fields.
     if (body.hasPfNumber !== undefined && saidNo(body.hasPfNumber)) vendor.pfNumber = '';
     if (body.hasEsiNumber !== undefined && saidNo(body.hasEsiNumber)) vendor.esiNumber = '';
+    // Shop Establishment and IEC sit behind their own "do you have one?" boxes
+    if (body.hasShopEstablishment !== undefined && saidNo(body.hasShopEstablishment)) {
+        vendor.shopEstablishmentNumber = '';
+    }
 
     if (uploadedDocs.length) vendor.kycDocuments.push(...uploadedDocs);
 

@@ -153,10 +153,11 @@ exports.createKycRequest = async (req, res) => {
         const kycType = requestedKycType(req);
         if (denyUnlessCanGenerateLink(req, res, kycType)) return;
 
-        // Nothing is asked for up front. The button mints a link straight away and
-        // the vendor supplies every detail — including their own name — through
-        // the form. A short placeholder keeps the record findable until then.
-        const vendorName = String(req.body.vendorName || '').trim();
+        // The team names the vendor before the link is generated, so the request
+        // can be identified in the Vendors list until the vendor submits. That
+        // name is temporary: the vendor supplies every detail — their own Legal
+        // Name included — through the form, and it replaces this one.
+        const vendorName = String(req.body.vendorName || '').trim().replace(/\s+/g, ' ');
         const email = String(req.body.email || '').trim().toLowerCase();
         if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
             return res.status(400).json({ success: false, message: 'Enter a valid email address' });
@@ -169,16 +170,30 @@ exports.createKycRequest = async (req, res) => {
             if (!vendor || !vendor.isActive) {
                 return res.status(404).json({ success: false, message: 'Vendor not found' });
             }
-        } else if (vendorName) {
-            // Only guard against duplicates when a name was actually supplied
+        } else {
+            if (!vendorName) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Enter the vendor name before generating the KYC link',
+                });
+            }
+            if (vendorName.length > 150) {
+                return res.status(400).json({ success: false, message: 'Vendor name must be 150 characters or fewer' });
+            }
+            // Duplicate guard, within this KYC workflow only. A Purchase vendor
+            // of the same name must not stop Operations raising its own KYC —
+            // an Operations user could not even open that Purchase record.
             const existing = await Vendor.findOne({
                 isActive: true,
                 vendorName: new RegExp(`^${escapeRegex(vendorName)}$`, 'i'),
+                ...kycTypeQuery([kycType]),
             });
             if (existing) {
                 return res.status(409).json({
                     success: false,
-                    message: `"${existing.vendorName}" is already in the vendor register. Generate the KYC link from their record instead.`,
+                    message: existing.nameIsPlaceholder
+                        ? `A KYC link for "${existing.vendorName}" has already been generated and is awaiting the vendor. Use Copy KYC Link on that row instead of generating another.`
+                        : `"${existing.vendorName}" is already in the vendor register. Generate the KYC link from their record instead.`,
                     data: { vendorId: existing._id, kycStatus: existing.kycStatus },
                 });
             }
@@ -192,11 +207,13 @@ exports.createKycRequest = async (req, res) => {
 
         if (!vendor) {
             // A shell record — the vendor supplies the rest through the form.
-            // The placeholder is overwritten by whatever name they submit.
-            const placeholder = `Awaiting KYC · ${require('crypto').randomBytes(3).toString('hex').toUpperCase()}`;
+            // The team's name identifies it until then; it is flagged as
+            // temporary so the vendor's form does not pre-fill it, and the
+            // Legal Name they submit overwrites it (kycService.applySubmission).
             vendor = new Vendor({
-                vendorName: vendorName || placeholder,
-                nameIsPlaceholder: !vendorName,
+                vendorName,
+                nameIsPlaceholder: true,
+                kycRequestName: vendorName,
                 email: email || undefined,
                 phone: String(req.body.phone || '').trim() || undefined,
                 contactPerson: String(req.body.contactPerson || '').trim() || undefined,
@@ -209,7 +226,12 @@ exports.createKycRequest = async (req, res) => {
                 createdByName: req.user.name,
                 kycStatus: 'not_sent',
             });
-            vendor.logKyc('created', req.user, { toStatus: 'not_sent', remarks: 'Created from a KYC request' });
+            // Deliberately NOT logged as a separate 'created' event. This record
+            // exists only because a KYC link was requested, so the
+            // 'link_generated' entry added below already describes the action —
+            // logging both produced two history rows for one click.
+            // Adding a vendor manually (createVendor) still logs 'created',
+            // because there no link is generated.
         }
 
         const previous = vendor.kycStatus;
@@ -222,6 +244,9 @@ exports.createKycRequest = async (req, res) => {
         }
 
         vendor.kycToken = Vendor.generateToken();
+        // Persist the exact URL that gets shared, so it can be copied again
+        // later by anyone authorised without minting a second link.
+        vendor.kycLinkUrl = publicKycUrl(vendor.kycToken);
         vendor.kycTokenGeneratedAt = new Date();
         vendor.kycTokenExpiresAt = new Date(Date.now() + TOKEN_TTL_DAYS * 86400000);
         vendor.kycStatus = 'sent';
@@ -494,6 +519,74 @@ exports.deleteVendor = async (req, res) => {
     }
 };
 
+// @desc    Return the KYC link ALREADY saved against this vendor.
+//
+//          Deliberately read-only: a user who forgot to copy the link when it
+//          was generated can retrieve the same one rather than minting a
+//          second, which would invalidate the link the vendor already has.
+//
+// @route   GET /api/vendors/:id/kyc-link
+// @access  Private (anyone who could have generated it, for that KYC type)
+exports.getSavedKycLink = async (req, res) => {
+    try {
+        if (denyUnlessCanView(req, res)) return;
+
+        const vendor = await Vendor.findById(req.params.id)
+            .select('vendorName companyName kycToken kycLinkUrl kycType kycStatus '
+                + 'kycSource kycSourceUserName kycTokenGeneratedAt kycTokenExpiresAt '
+                + 'kycLinkSentAt kycSubmittedAt nameIsPlaceholder kycRequestName');
+        if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
+        if (denyUnlessCanAccessKyc(req, res, vendor)) return;
+
+        const kycType = vendor.kycType || DEFAULT_KYC_TYPE;
+        // Reading a link is the same privilege as creating one
+        if (!canGenerateKycLink(req.user, kycType)) {
+            return res.status(403).json({
+                success: false,
+                message: 'You are not allowed to view KYC links for this workflow',
+            });
+        }
+
+        // Older records were saved before the URL was stored, so rebuild from
+        // the token when needed.
+        const link = vendor.kycLinkUrl || (vendor.kycToken ? publicKycUrl(vendor.kycToken) : null);
+        if (!link) {
+            return res.status(404).json({
+                success: false,
+                message: 'No KYC link has been generated for this vendor yet.',
+            });
+        }
+
+        const expired = !!vendor.kycTokenExpiresAt && vendor.kycTokenExpiresAt < new Date();
+
+        res.status(200).json({
+            success: true,
+            data: {
+                kycLink: link,
+                kycType,
+                kycTypeLabel: kycType === 'operations' ? 'Operations KYC' : 'Purchase KYC',
+                // Internal staff see the name their team entered; an old
+                // auto-generated "Awaiting KYC ..." id is still left blank
+                vendorName: vendor.nameIsPlaceholder ? (vendor.kycRequestName || '') : (vendor.vendorName || ''),
+                companyName: vendor.companyName || '',
+                kycStatus: vendor.kycStatus,
+                generatedBy: vendor.kycSourceUserName || '',
+                generatedDepartment: vendor.kycSource || null,
+                generatedAt: vendor.kycTokenGeneratedAt,
+                expiresAt: vendor.kycTokenExpiresAt,
+                lastSentAt: vendor.kycLinkSentAt,
+                submittedAt: vendor.kycSubmittedAt,
+                expired,
+                // A submitted form can no longer be filled in again
+                usable: !expired && ['sent', 'not_sent'].includes(vendor.kycStatus),
+            },
+        });
+    } catch (error) {
+        console.error('Get saved KYC link error:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    }
+};
+
 // @desc    Generate (or regenerate) the vendor's public KYC form link.
 //          The generating department is recorded as the KYC source.
 // @route   POST /api/vendors/:id/kyc-link
@@ -522,6 +615,7 @@ exports.generateKycLink = async (req, res) => {
 
         const previous = vendor.kycStatus;
         vendor.kycToken = Vendor.generateToken();
+        vendor.kycLinkUrl = publicKycUrl(vendor.kycToken);
         vendor.kycTokenGeneratedAt = new Date();
         vendor.kycTokenExpiresAt = new Date(Date.now() + TOKEN_TTL_DAYS * 86400000);
         vendor.kycStatus = 'sent';

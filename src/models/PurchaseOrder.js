@@ -15,10 +15,16 @@ const poItemSchema = new mongoose.Schema({
     amount: { type: Number, default: 0, min: 0 }
 }, { _id: true });
 
+// POs are no longer sent through the CRM — Purchase downloads the PDF, prints it
+// on letterhead and dispatches it by hand. 'sent' and 'acknowledged' stay valid
+// ONLY so the history of orders sent before that change still loads and saves;
+// no code path records them any more.
+const LEGACY_ACTIVITY_ACTIONS = ['sent', 'acknowledged'];
+
 const poActivitySchema = new mongoose.Schema({
     action: {
         type: String,
-        enum: ['created', 'updated', 'generated', 'sent', 'acknowledged', 'completed', 'cancelled'],
+        enum: ['created', 'updated', 'generated', 'completed', 'cancelled', ...LEGACY_ACTIVITY_ACTIONS],
         required: true
     },
     at: { type: Date, default: Date.now },
@@ -28,7 +34,12 @@ const poActivitySchema = new mongoose.Schema({
     note: { type: String, trim: true }
 }, { _id: false });
 
-const PO_STATUSES = ['draft', 'generated', 'sent', 'acknowledged', 'completed', 'cancelled'];
+const PO_STATUSES = ['draft', 'generated', 'completed', 'cancelled'];
+
+// Statuses of the retired send workflow. An order still carrying one (saved
+// before the change) is treated as 'generated' — it was generated, and sending
+// is now done outside the CRM.
+const LEGACY_SENT_STATUSES = ['sent', 'acknowledged'];
 
 const purchaseOrderSchema = new mongoose.Schema({
     // Auto-generated, unique and immutable once assigned (see pre-validate hook)
@@ -86,12 +97,13 @@ const purchaseOrderSchema = new mongoose.Schema({
         index: true
     },
 
-    // Sharing record
-    sentAt: { type: Date },
-    sentTo: { type: String, trim: true },
-    sentMethod: { type: String, enum: ['email', 'whatsapp', 'manual', 'link', null], default: null },
-    sentBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    sentByName: { type: String, trim: true },
+    // Latest edit of an existing PO. Set only by the server when an edit that
+    // actually changes something is saved — never read from the request — and
+    // left unset on an order that has never been edited. Creation time stays in
+    // createdAt; every edit is also recorded as an 'updated' activity entry.
+    lastEditedAt: { type: Date },
+    lastEditedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    lastEditedByName: { type: String, trim: true },
 
     activity: [poActivitySchema],
 
@@ -105,6 +117,13 @@ const purchaseOrderSchema = new mongoose.Schema({
 
 purchaseOrderSchema.index({ status: 1, createdAt: -1 });
 purchaseOrderSchema.index({ vendor: 1, createdAt: -1 });
+
+// An order saved under the retired send workflow still loads, and saving it
+// again must not fail enum validation.
+purchaseOrderSchema.pre('validate', function (next) {
+    if (LEGACY_SENT_STATUSES.includes(this.status)) this.status = 'generated';
+    next();
+});
 
 // Recompute line amounts and totals so the numbers can never drift from the items.
 purchaseOrderSchema.pre('save', function (next) {
@@ -153,3 +172,4 @@ purchaseOrderSchema.methods.logActivity = function (action, actor, note) {
 
 module.exports = mongoose.model('PurchaseOrder', purchaseOrderSchema);
 module.exports.PO_STATUSES = PO_STATUSES;
+module.exports.LEGACY_SENT_STATUSES = LEGACY_SENT_STATUSES;

@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const { body } = require('express-validator');
 const rcController = require('../controllers/rateComparisonController');
 const { protect, authorize, allowDepartment } = require('../middleware/auth');
 
@@ -9,18 +8,14 @@ const { protect, authorize, allowDepartment } = require('../middleware/auth');
 // Approval authority is narrowed to admin-level inside the controller.
 router.use(protect, allowDepartment('purchase'));
 
-const rcValidation = [
-    body('materialName').trim().notEmpty().withMessage('Material name is required'),
-    body('requiredQuantity').notEmpty().withMessage('Required quantity is required')
-        .isFloat({ gt: 0 }).withMessage('Required quantity must be greater than zero'),
-];
-
 // Helper routes before /:id
 router.get('/stats', rcController.getRateComparisonStats);
 
 router.route('/')
     .get(rcController.getRateComparisons)
-    .post(rcValidation, rcController.createRateComparison);
+    // Items, quantities and quotations are validated in rateComparisonService,
+    // which understands multi-item comparisons
+    .post(rcController.createRateComparison);
 
 // Workflow actions
 router.post('/:id/submit', rcController.submitForApproval);
